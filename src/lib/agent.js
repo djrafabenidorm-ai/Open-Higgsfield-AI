@@ -9,9 +9,62 @@ import { CAMERA_PRESETS, RESTYLE_PRESETS } from './presets.js';
 
 const uniq = (list) => [...new Map(list.map(m => [m.id, m])).values()];
 
-function modelLine(m, kind) {
+// ---- Live prices ------------------------------------------------------------
+// Prices live server-side (netlify/functions/models.js: published Kie rates,
+// replaced by measured averages from real runs) and are served with the model
+// list at /.netlify/functions/models. Fetched once per session and cached;
+// every consumer degrades gracefully to "no price" when the fetch fails.
+let pricingCache = null;
+export async function fetchModelPricing() {
+    if (pricingCache) return pricingCache;
+    try {
+        const res = await fetch('/.netlify/functions/models', { credentials: 'include' });
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (data.models || []);
+        const map = {};
+        for (const m of list) if (m?.id && m.pricing) map[m.id] = m.pricing;
+        pricingCache = map;
+    } catch { pricingCache = {}; }
+    return pricingCache;
+}
+
+const fmtCr = (n) => (Math.round(n * 10) / 10).toLocaleString('en-US');
+const fmtUsd = (cr) => `$${(cr * 0.005).toFixed(2)}`;
+
+// "from 2.4 cr/sec (≈ $0.012/sec)" / "250 cr/video (≈ $1.25; 720p 250 · 1080p 255)"
+export function priceText(p) {
+    if (!p?.credits) return '';
+    const unit = String(p.unit || 'cr/video').replace('cr/', '');
+    let s = `${p.from ? 'from ' : ''}${fmtCr(p.credits)} cr/${unit} (≈ ${fmtUsd(p.credits)}${unit === 'sec' ? '/sec' : ''})`;
+    if (p.byResolution) {
+        const tiers = Object.entries(p.byResolution).map(([r, v]) => `${r} ${fmtCr(v.credits)}`).join(' · ');
+        if (tiers) s += ` — by resolution: ${tiers} cr`;
+    }
+    if (p.source === 'measured') s += ' (measured from real runs)';
+    return s;
+}
+
+// Estimated total for one planned generation, or null when unpriced.
+export function estimateCost(p, plan) {
+    if (!p?.credits || !plan) return null;
+    let credits = p.credits, unit = p.unit || 'cr/video';
+    const resTier = plan.resolution && p.byResolution?.[plan.resolution];
+    if (resTier?.credits) { credits = resTier.credits; unit = resTier.unit || unit; }
+    let total = credits;
+    if (unit === 'cr/sec' && plan.kind === 'video') total = credits * (Number(plan.duration) || 5);
+    return { credits: total, usd: total * 0.005, from: !!p.from, unit, perSec: unit === 'cr/sec' ? credits : null };
+}
+
+export function costLabel(est) {
+    if (!est) return '';
+    return `${est.from ? 'from ' : ''}≈ ${fmtCr(est.credits)} credits (~${fmtUsd(est.credits)})`;
+}
+
+function modelLine(m, kind, pricing) {
     const fit = fitInfo(m.id);
     const parts = [`${m.id} — ${m.name || m.label || m.id} (${kind})`];
+    const pt = priceText(pricing?.[m.id]);
+    if (pt) parts.push(`price: ${pt}`);
     if (fit?.note) parts.push(fit.note);
     if (fit) parts.push(`tier: ${fit.tier}, reference photos: ${fit.refs || 0}${fit.voice ? ', takes a voiceover' : ''}`);
     if (m.aspects?.length) parts.push(`aspect ratios: ${m.aspects.join(', ')}`);
@@ -29,16 +82,17 @@ function modelLine(m, kind) {
 
 // Compact, current picture of the whole app for the chat model. Built at
 // runtime from the same registries the studios use.
-export function buildAgentContext() {
+export function buildAgentContext(prices = {}) {
     const lines = [];
     lines.push('IMAGE MODELS (text-to-image / image edit):');
-    uniq([...t2iModels, ...i2iModels]).forEach(m => lines.push(modelLine(m, 'image')));
+    uniq([...t2iModels, ...i2iModels]).forEach(m => lines.push(modelLine(m, 'image', prices)));
     lines.push('VIDEO MODELS (text-to-video / image-to-video):');
-    uniq([...t2vModels, ...i2vModels]).forEach(m => lines.push(modelLine(m, 'video')));
+    uniq([...t2vModels, ...i2vModels]).forEach(m => lines.push(modelLine(m, 'video', prices)));
     if (lipsyncModels.length) {
         lines.push('LIP-SYNC / TALKING MODELS (portrait + audio -> talking video, in the Lip Sync tool):');
-        lipsyncModels.forEach(m => lines.push(modelLine(m, 'talk')));
+        lipsyncModels.forEach(m => lines.push(modelLine(m, 'talk', prices)));
     }
+    lines.push('PRICES: Model prices above are in Kie credits (1 credit ≈ $0.005); "from" prices are the cheapest option for that model and the real cost depends on the settings (per-second models cost rate × duration; some models price per resolution — those tiers are listed). You know every model\'s price and specs: when the user asks what something costs, or mentions a budget, compare models on price and state the estimated total for the planned settings in your plan note (e.g. "about 41 credits (~$0.21) for 10s at 720p"). Two models have no published per-generation price: ElevenLabs voiceover bills per character (~12 credits per 1,000 characters; cloned voices use the user\'s own ElevenLabs plan), and HappyHorse video edit is unpriced.');
     lines.push(`VIDEO LOOKS: ${VIDEO_STYLES.map(s => `${s.id} (${s.label})`).join(', ')}`);
     lines.push(`IMAGE LOOKS: ${IMAGE_STYLES.map(s => `${s.id} (${s.label})`).join(', ')}`);
     lines.push(`CAMERA PRESETS for video: ${CAMERA_PRESETS.filter(p => p.id !== 'none').map(p => p.label).join(', ')}`);
@@ -128,7 +182,8 @@ const WORKFLOW_GUIDANCE = {
 // current gate selection. It rides inside the context string, which the
 // agent-chat function appends verbatim to its system prompt.
 export async function chatWithAgent(history, sel = {}) {
-    let context = buildAgentContext();
+    const prices = await fetchModelPricing();
+    let context = buildAgentContext(prices);
     if (sel.intent) {
         const wf = sel.workflow && WORKFLOW_GUIDANCE[sel.workflow]
             ? ` Workflow: ${sel.workflow} (${WORKFLOW_GUIDANCE[sel.workflow]}).`

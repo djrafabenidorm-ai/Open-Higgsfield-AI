@@ -4,7 +4,7 @@
 // in the Library the normal way). Falls back to a deterministic local
 // planner (src/lib/agent.js) when the AI chat backend cannot be reached.
 import { kie } from '../lib/kie.js';
-import { chatWithAgent, parsePlan, localPlan, detectKind, modelById, modelAcceptsImages } from '../lib/agent.js';
+import { chatWithAgent, parsePlan, localPlan, detectKind, modelById, modelAcceptsImages, fetchModelPricing, estimateCost, costLabel } from '../lib/agent.js';
 import { getVideoSpec, advancedFieldsFor } from '../lib/videoSpecs.js';
 import { createSetupPanel } from './SetupPanel.js';
 import { VIDEO_STYLES, fitInfo, lockInstruction } from '../lib/modelStyles.js';
@@ -178,6 +178,27 @@ export function AssistantStudio() {
             durSel = mkSelect('Duration', durations, plan.duration || durations[0]);
         }
         card.appendChild(settings);
+
+        // Estimated cost from the live price list — same numbers the agent
+        // reasons over. Recomputes when quality/duration change.
+        const costLine = document.createElement('div');
+        costLine.className = 'text-[11px] font-bold text-secondary';
+        costLine.textContent = 'Estimated cost: checking prices…';
+        card.appendChild(costLine);
+        const refreshCost = async () => {
+            const prices = await fetchModelPricing();
+            const est = estimateCost(prices[plan.model], {
+                kind: plan.kind,
+                resolution: resSel?.value || plan.resolution,
+                duration: durSel?.value || plan.duration,
+            });
+            costLine.textContent = est
+                ? `Estimated cost: ${costLabel(est)}${est.perSec ? ` (${est.perSec} cr/sec × ${durSel?.value || plan.duration || 5}s)` : ''}`
+                : 'Estimated cost: no published price for this model';
+        };
+        refreshCost();
+        resSel?.addEventListener('change', refreshCost);
+        durSel?.addEventListener('change', refreshCost);
 
         // Attachments / locks summary — reads the CURRENT working set (setup
         // panel + composer attachments) at render time.
