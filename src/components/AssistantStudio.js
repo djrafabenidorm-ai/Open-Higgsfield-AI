@@ -4,7 +4,7 @@
 // in the Library the normal way). Falls back to a deterministic local
 // planner (src/lib/agent.js) when the AI chat backend cannot be reached.
 import { kie } from '../lib/kie.js';
-import { chatWithAgent, parsePlan, localPlan, detectKind, modelById } from '../lib/agent.js';
+import { chatWithAgent, parsePlan, localPlan, detectKind, modelById, modelAcceptsImages } from '../lib/agent.js';
 import { getVideoSpec, advancedFieldsFor } from '../lib/videoSpecs.js';
 import { createSetupPanel } from './SetupPanel.js';
 import { VIDEO_STYLES, fitInfo, lockInstruction } from '../lib/modelStyles.js';
@@ -32,6 +32,12 @@ export function AssistantStudio() {
     // sends until the user removes a chip.
     const attachments = []; // { id, kind: 'image'|'video'|'audio', name, url, thumb, uploading }
     let attachSeq = 0;
+    // Relevance gate: intent first (image/video), then workflow. Composer
+    // options only appear when the current selection can actually use them.
+    let intent = null; // 'image' | 'video'
+    let workflow = null; // 'scratch' | 'edit' | 'animate' | 'refs' | 'talking'
+    let planGate = null; // model-level gate from the latest plan card: { noImages, noAudio }
+    let libKinds = ['image']; // kinds the Library popover may attach right now
 
     // --- Header ---
     const hero = document.createElement('div');
@@ -102,6 +108,8 @@ export function AssistantStudio() {
     // --- Plan card ---
     function addPlanCard(plan) {
         const model = modelById(plan.model);
+        const planFit = fitInfo(plan.model);
+        const acceptsImgs = modelAcceptsImages(plan.model, plan.kind);
         const card = document.createElement('div');
         card.className = 'bg-card-bg border border-primary/30 rounded-2xl p-4 md:p-5 flex flex-col gap-3 animate-fade-in-up shadow-3xl';
 
@@ -173,6 +181,9 @@ export function AssistantStudio() {
                 if (st.refs.length && !refsCapable) {
                     line('This model can\'t use reference photos — they\'ll be ignored. Ask me for one with reference support.', true);
                 }
+                if (!acceptsImgs) {
+                    line("This model doesn't take images — uploads are off for it.", true);
+                }
                 const imgCount = attachments.filter(a => a.kind === 'image').length;
                 const audioCount = attachments.filter(a => a.kind === 'audio').length;
                 const videoCount = attachments.filter(a => a.kind === 'video').length;
@@ -194,8 +205,15 @@ export function AssistantStudio() {
             }
         }
 
-        // Optional start/reference image.
+        // Optional start/reference image — only rendered when this model
+        // actually takes images; otherwise a plain note replaces the slot.
         let imageUrl = null;
+        if (!acceptsImgs) {
+            const noImg = document.createElement('div');
+            noImg.className = 'text-[11px] leading-relaxed text-amber-400';
+            noImg.textContent = "This model doesn't take images — uploads are off for it.";
+            card.appendChild(noImg);
+        } else {
         const attachRow = document.createElement('div');
         attachRow.className = 'flex items-center gap-3';
         const attachBtn = document.createElement('button');
@@ -221,6 +239,7 @@ export function AssistantStudio() {
         };
         attachRow.append(attachBtn, attachState, fileInput);
         card.appendChild(attachRow);
+        }
 
         // Actions.
         const actions = document.createElement('div');
@@ -233,7 +252,7 @@ export function AssistantStudio() {
         dismissBtn.type = 'button';
         dismissBtn.className = 'text-xs font-bold text-secondary hover:text-white transition-colors';
         dismissBtn.textContent = 'Not now';
-        dismissBtn.onclick = () => { card.remove(); addNote('Plan dismissed — tell me what to change, or describe something new.'); };
+        dismissBtn.onclick = () => { card.remove(); planGate = null; refreshGates(); addNote('Plan dismissed — tell me what to change, or describe something new.'); };
         const status = document.createElement('span');
         status.className = 'text-[11px] text-secondary';
         actions.append(goBtn, dismissBtn, status);
@@ -256,15 +275,17 @@ export function AssistantStudio() {
                 return;
             }
             const fit = fitInfo(finalPlan.model);
-            const refs = (fit?.refs || 0) > 0 ? st.refs.slice(0, fit.refs || 9) : [];
+            const acceptsImgs = modelAcceptsImages(finalPlan.model, finalPlan.kind);
+            const refs = acceptsImgs && (fit?.refs || 0) > 0 ? st.refs.slice(0, fit.refs || 9) : [];
+            const manualImage = acceptsImgs ? imageUrl : null;
             const finalPrompt = [finalPlan.prompt, lockInstruction(st.characters, st.items), st.style !== 'any' ? st.styleHint : ''].filter(Boolean).join(' ');
-            const attachedImages = attachments.filter(a => a.kind === 'image' && a.url).map(a => a.url);
+            const attachedImages = acceptsImgs ? attachments.filter(a => a.kind === 'image' && a.url).map(a => a.url) : [];
             const attachedAudio = attachments.filter(a => a.kind === 'audio' && a.url).map(a => a.url);
             const attachedVideos = attachments.filter(a => a.kind === 'video' && a.url).map(a => a.url);
             const imagesList = finalPlan.kind === 'image'
-                ? [...new Set([...refs, ...attachedImages, ...(imageUrl ? [imageUrl] : [])])].slice(0, 9)
+                ? [...new Set([...refs, ...attachedImages, ...(manualImage ? [manualImage] : [])])].slice(0, 9)
                 : [];
-            const startImage = finalPlan.kind === 'video' ? (imageUrl || attachedImages[0] || null) : null;
+            const startImage = finalPlan.kind === 'video' ? (manualImage || attachedImages[0] || null) : null;
             const isSeedance = String(finalPlan.model).startsWith('bytedance/seedance');
             const audioUrls = attachedAudio.length && (isSeedance || fit?.voice) ? attachedAudio.slice(0, 3) : [];
             const hasRefVideoField = finalPlan.kind === 'video' && attachedVideos.length > 0
@@ -317,6 +338,7 @@ export function AssistantStudio() {
                         genRow.remove();
                         if (!res?.url) { status.textContent = 'Finished without a result URL.'; goBtn.disabled = false; dismissBtn.disabled = false; return; }
                         card.remove();
+                        planGate = null; refreshGates();
                         addResult(finalPlan, res.url);
                         history.push({ role: 'assistant', text: `Generated a ${finalPlan.kind} with ${finalPlan.modelName}. It is saved in the Library.` });
                     },
@@ -324,6 +346,15 @@ export function AssistantStudio() {
                 }
             ).catch(failInChat);
         };
+
+        // This card is now the latest plan: its model's capabilities gate
+        // the composer (attach buttons) until a new message is sent, the
+        // card is dismissed, or the generation completes.
+        planGate = {
+            noImages: !acceptsImgs,
+            noAudio: plan.kind === 'image' ? true : !(String(plan.model).startsWith('bytedance/seedance') || !!planFit?.voice),
+        };
+        refreshGates();
 
         thread.appendChild(card);
         scrollDown();
@@ -359,13 +390,14 @@ export function AssistantStudio() {
     setupLabel.className = 'text-[10px] font-bold uppercase tracking-widest text-secondary px-2 pb-2';
     setupLabel.textContent = 'ADD CHARACTER / ITEMS · LOOK';
     setupBox.append(setupLabel, setup.element);
+    setupBox.classList.add('hidden'); // refreshGates() reveals it once an intent is picked
     container.appendChild(setupBox);
 
     // --- Composer attachments: uploads + Library picks (the working set) ---
     const attachChipsRow = document.createElement('div');
     attachChipsRow.className = 'hidden flex-wrap gap-1.5';
     const attachRow = document.createElement('div');
-    attachRow.className = 'flex items-center gap-1.5 flex-wrap';
+    attachRow.className = 'items-center gap-1.5 flex-wrap hidden'; // refreshGates() toggles flex/hidden
 
     function renderAttachChips() {
         attachChipsRow.innerHTML = '';
@@ -450,11 +482,12 @@ export function AssistantStudio() {
         };
         return b;
     }
-    attachRow.append(
-        fileButton('⬆ Image', 'image', 'image/*', true),
-        fileButton('⬆ Video', 'video', 'video/*', false),
-        fileButton('⬆ Audio', 'audio', 'audio/*', false),
-    );
+    // No ⬆ Video button: no current workflow/model path consumes video
+    // references through the app, so it is not offered. (Video-kind
+    // attachments stay supported in code — the Library path handles them.)
+    const imgBtn = fileButton('⬆ Image', 'image', 'image/*', true);
+    const audBtn = fileButton('⬆ Audio', 'audio', 'audio/*', false);
+    attachRow.append(imgBtn, audBtn);
 
     // Library picker popover (opens upward — the composer sits at the bottom).
     const libWrap = document.createElement('div');
@@ -479,17 +512,29 @@ export function AssistantStudio() {
                 libPop.innerHTML = '<div class="text-xs text-secondary p-3">Your Library is empty — everything you generate lands here.</div>';
                 return;
             }
-            items.slice(0, 40).forEach(item => {
+            // Only kinds the current gate allows are listed. In video
+            // workflows videos are listed but cannot be attached — no
+            // current model consumes video references.
+            const visibleItems = items.filter(item => libKinds.includes(item.kind === 'videos' ? 'video' : 'image'));
+            if (!visibleItems.length) {
+                libPop.innerHTML = '<div class="text-xs text-secondary p-3">Nothing in your Library fits this creation type yet.</div>';
+                return;
+            }
+            visibleItems.slice(0, 40).forEach(item => {
                 const kind = item.kind === 'videos' ? 'video' : 'image';
                 const rowB = document.createElement('button');
                 rowB.type = 'button';
                 rowB.className = 'w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 text-left';
-                rowB.innerHTML = `<img src="${esc(item.thumb || item.url || '')}" class="w-10 h-10 rounded-lg object-cover bg-black shrink-0" alt=""><span class="flex flex-col min-w-0"><span class="text-xs font-bold text-white truncate">${kind === 'video' ? '🎬 Video' : '🖼️ Image'}${item.model ? ` · ${esc(item.model)}` : ''}</span><span class="text-[10px] text-secondary truncate">${esc(item.prompt || '')}</span></span>`;
+                rowB.innerHTML = `<img src="${esc(item.thumb || item.url || '')}" class="w-10 h-10 rounded-lg object-cover bg-black shrink-0" alt=""><span class="flex flex-col min-w-0"><span class="text-xs font-bold text-white truncate">${kind === 'video' ? '🎬 Video' : '🖼️ Image'}${item.model ? ` · ${esc(item.model)}` : ''}</span><span class="text-[10px] text-secondary truncate">${kind === 'video' ? 'Video references aren\'t supported yet' : esc(item.prompt || '')}</span></span>`;
                 rowB.onclick = (ev) => {
                     ev.stopPropagation();
+                    libPop.classList.add('hidden');
+                    if (kind === 'video') {
+                        addBubble('assistant', 'Video references aren\'t supported by the current models yet — pick an image instead, or just describe the video you want to make.');
+                        return;
+                    }
                     attachments.push({ id: ++attachSeq, kind, name: 'Library item', url: item.url, thumb: item.thumb || item.url, uploading: false });
                     renderAttachChips();
-                    libPop.classList.add('hidden');
                 };
                 libPop.appendChild(rowB);
             });
@@ -502,6 +547,23 @@ export function AssistantStudio() {
         }
     };
     attachRow.appendChild(libWrap);
+
+    // --- Selection status line: current intent · workflow, with Change ---
+    const gateLine = document.createElement('div');
+    gateLine.className = 'w-full max-w-3xl mt-3 hidden items-center justify-between gap-3 bg-panel-bg/60 border border-white/5 rounded-full pl-4 pr-2 py-1.5';
+    const gateLineText = document.createElement('span');
+    gateLineText.className = 'text-[11px] font-bold text-white/80';
+    const gateChangeBtn = document.createElement('button');
+    gateChangeBtn.type = 'button';
+    gateChangeBtn.className = 'text-[11px] font-black text-primary hover:text-white transition-colors px-2 py-0.5';
+    gateChangeBtn.textContent = 'Change';
+    gateChangeBtn.onclick = () => {
+        intent = null; workflow = null; planGate = null;
+        updateGateLine(); refreshGates(); showIntentCards();
+        input.focus();
+    };
+    gateLine.append(gateLineText, gateChangeBtn);
+    container.appendChild(gateLine);
 
     // --- Input bar ---
     const bar = document.createElement('div');
@@ -536,6 +598,125 @@ export function AssistantStudio() {
     });
     container.appendChild(chips);
 
+    // --- Intent gate: image or video first, then the workflow --------------
+    const WORKFLOWS = {
+        image: [
+            { id: 'scratch', label: 'From scratch', next: 'Perfect — describe the image in your own words. No uploads needed; I\'ll write the prompt and pick the model.' },
+            { id: 'edit', label: 'Edit my photo', next: 'Upload the photo you want to edit (⬆ Image or ▤ Library below), then tell me what to change.' },
+            { id: 'refs', label: 'Keep character / product the same', next: 'Add your character or item in the panel below — a saved character or uploaded photos — then describe the new image. I\'ll keep them looking the same.' },
+        ],
+        video: [
+            { id: 'scratch', label: 'From scratch', next: 'Perfect — describe the video in your own words. No uploads needed; I\'ll write the prompt and pick the model.' },
+            { id: 'animate', label: 'Animate a photo', next: 'Upload the photo you want to animate (⬆ Image or ▤ Library below), then describe how it should move.' },
+            { id: 'refs', label: 'Character / product video', next: 'Add your character or item in the panel below — a saved character or uploaded photos — then describe the video. I\'ll keep them looking the same.' },
+            { id: 'talking', label: 'Talking / voiceover', next: 'Attach a portrait photo and/or an audio clip below (⬆ Image / ⬆ Audio / ▤ Library), then tell me what it should say — or describe the talking scene.' },
+        ],
+    };
+
+    let intentCardsEl = null;
+    function removeIntentCards() { intentCardsEl?.remove(); intentCardsEl = null; }
+
+    function showIntentCards() {
+        removeIntentCards();
+        intentCardsEl = document.createElement('div');
+        intentCardsEl.className = 'flex gap-3 animate-fade-in-up';
+        const mk = (kind, emoji, label, sub) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'flex-1 bg-card-bg border border-white/10 hover:border-primary/60 hover:bg-primary/5 rounded-2xl p-5 flex flex-col items-center gap-1.5 text-center transition-all';
+            b.innerHTML = `<span class="text-3xl">${emoji}</span><span class="text-white font-black text-sm">${label}</span><span class="text-[11px] text-secondary leading-snug">${sub}</span>`;
+            b.onclick = () => chooseIntent(kind);
+            return b;
+        };
+        intentCardsEl.append(
+            mk('image', '🖼️', 'Create an image', 'Portraits, posters, product shots, artwork'),
+            mk('video', '🎬', 'Create a video', 'Clips, animations, ads, reels'),
+        );
+        thread.appendChild(intentCardsEl);
+        scrollDown();
+    }
+
+    function chooseIntent(kind) {
+        intent = kind; workflow = null; planGate = null;
+        removeIntentCards();
+        addBubble('user', kind === 'image' ? 'Image' : 'Video');
+        history.push({ role: 'user', text: kind === 'image' ? 'Image' : 'Video' });
+        const ask = kind === 'image' ? 'Great — what kind of image?' : 'Great — what kind of video?';
+        addBubble('assistant', ask);
+        history.push({ role: 'assistant', text: ask });
+        showWorkflowChips(kind);
+        updateGateLine();
+        refreshGates();
+    }
+
+    function showWorkflowChips(kind) {
+        const rowEl = document.createElement('div');
+        rowEl.className = 'flex flex-wrap gap-2 animate-fade-in-up';
+        WORKFLOWS[kind].forEach(w => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'text-[11px] font-bold px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-white/70 hover:border-primary/50 hover:text-white transition-all';
+            chip.textContent = w.label;
+            chip.onclick = () => { rowEl.remove(); chooseWorkflow(w); };
+            rowEl.appendChild(chip);
+        });
+        thread.appendChild(rowEl);
+        scrollDown();
+    }
+
+    function chooseWorkflow(w) {
+        workflow = w.id;
+        addBubble('user', w.label);
+        history.push({ role: 'user', text: w.label });
+        addBubble('assistant', w.next);
+        history.push({ role: 'assistant', text: w.next });
+        updateGateLine();
+        refreshGates();
+        input.focus();
+    }
+
+    function updateGateLine() {
+        gateLine.classList.toggle('hidden', !intent);
+        gateLine.classList.toggle('flex', !!intent);
+        if (!intent) return;
+        const wfLabel = workflow ? (WORKFLOWS[intent] || []).find(w => w.id === workflow)?.label : '';
+        gateLineText.textContent = `${intent === 'video' ? '🎬 Video' : '🖼 Image'}${wfLabel ? ` · ${wfLabel}` : ''}`;
+    }
+
+    function setBtnState(btn, visible, disabled) {
+        btn.classList.toggle('hidden', !visible);
+        btn.disabled = !visible || disabled;
+        btn.classList.toggle('opacity-40', visible && disabled);
+        btn.classList.toggle('pointer-events-none', visible && disabled);
+    }
+
+    // Single place that shows/enables composer options: intent/workflow
+    // visibility first, then the latest plan's model-level gate on top.
+    function refreshGates() {
+        let showSetup = false, showAttach = false, showImage = false, showAudio = false, showLib = false;
+        if (intent) {
+            showSetup = workflow !== 'scratch';
+            if (workflow === 'scratch') {
+                // Text-only workflow: no uploads at all.
+            } else if (workflow === 'talking') {
+                showAttach = showImage = showAudio = showLib = true;
+            } else if (workflow) { // edit / animate / refs
+                showAttach = showImage = showLib = true;
+            } else if (intent === 'video') { // intent only, no workflow yet
+                showAttach = showImage = showAudio = showLib = true;
+            } else {
+                showAttach = showImage = showLib = true;
+            }
+        }
+        setupBox.classList.toggle('hidden', !showSetup);
+        attachRow.classList.toggle('hidden', !showAttach);
+        attachRow.classList.toggle('flex', showAttach);
+        setBtnState(imgBtn, showImage, !!planGate?.noImages);
+        setBtnState(audBtn, showAudio, !!planGate?.noAudio);
+        setBtnState(libBtn, showLib, !!planGate?.noImages);
+        libKinds = intent === 'video' ? ['image', 'video'] : ['image'];
+    }
+
     function setModeBadge() {
         const badge = hero.querySelector('#agent-mode');
         if (badge) {
@@ -547,13 +728,13 @@ export function AssistantStudio() {
 
     function answerLocally(text) {
         // Local planner: one clarifying question at most, then a plan.
+        const sel = { intent, workflow };
         if (pendingBrief) {
-            const kind = detectKind(text);
-            const out = localPlan(pendingBrief, kind ? { kind } : {});
+            const out = localPlan(pendingBrief, sel);
             pendingBrief = null;
             if (out.plan) { addBubble('assistant', out.note); addPlanCard(out.plan); history.push({ role: 'assistant', text: out.note }); return; }
         }
-        const out = localPlan(text);
+        const out = localPlan(text, sel);
         if (out.needs === 'kind') {
             pendingBrief = text;
             addBubble('assistant', out.question);
@@ -629,6 +810,18 @@ export function AssistantStudio() {
     async function send() {
         const text = input.value.trim();
         if (!text || busy) return;
+        // New turn: the previous plan's model-level gate lifts, back to
+        // workflow-level gates until a new plan renders.
+        planGate = null;
+        // No intent picked yet: infer it from the words (video words ->
+        // video, otherwise image) and proceed at the intent level.
+        if (!intent) {
+            intent = detectKind(text) || 'image';
+            workflow = null;
+            removeIntentCards();
+            updateGateLine();
+        }
+        refreshGates();
         input.value = '';
         busy = true; sendBtn.disabled = true; sendBtn.textContent = '…';
         const manifest = buildManifest();
@@ -639,8 +832,8 @@ export function AssistantStudio() {
 
         const thinking = addBubble('assistant', 'Thinking…');
         try {
-            const reply = await chatWithAgent(history);
-            const { cleanText, plan } = parsePlan(reply);
+            const reply = await chatWithAgent(history, { intent, workflow });
+            const { cleanText, plan } = parsePlan(reply, { intent, workflow });
             thinking.textContent = cleanText || (plan ? 'Here\'s my plan:' : '…');
             history.push({ role: 'assistant', text: cleanText || 'Proposed a generation plan.' });
             if (plan) addPlanCard(plan);
@@ -665,6 +858,9 @@ export function AssistantStudio() {
     });
 
     addBubble('assistant', 'Hey! What are we making today — an image or a video? Describe it in your own words and I\'ll handle the model, settings and prompt.');
+
+    // Fresh chat: the intent gate comes first.
+    showIntentCards();
 
     // Resume generations started in an earlier chat that are still running:
     // they kept going in the background (and into the Library) while this

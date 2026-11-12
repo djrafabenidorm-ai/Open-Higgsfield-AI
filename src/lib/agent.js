@@ -49,8 +49,44 @@ export function buildAgentContext() {
     return lines.join('\n');
 }
 
+// ---- Selection fit (intent / workflow gates) --------------------------------
+const isSeedance = (id) => String(id || '').startsWith('bytedance/seedance');
+const voiceCapable = (id) => !!fitInfo(id)?.voice || isSeedance(id);
+
+// Does this model take image inputs at all (start frame / references)?
+// Video: i2v-capable registry entries (m.images) or a reference-photo count.
+// Image: image-to-image registry entries or a reference-photo count.
+export function modelAcceptsImages(id, kind) {
+    if ((fitInfo(id)?.refs || 0) > 0) return true;
+    if (kind === 'video') return i2vModels.some(m => m.id === id);
+    if (kind === 'image') return i2iModels.some(m => m.id === id);
+    return false;
+}
+
+function planFitsSelection(plan, sel) {
+    if (sel.intent && plan.kind !== sel.intent) return false;
+    switch (sel.workflow) {
+        case 'scratch': return !modelById(plan.model)?.images?.required;
+        case 'edit': return plan.kind === 'image' && modelAcceptsImages(plan.model, 'image');
+        case 'animate': return plan.kind === 'video' && modelAcceptsImages(plan.model, 'video');
+        case 'refs': return (fitInfo(plan.model)?.refs || 0) > 0;
+        case 'talking': return plan.kind === 'video' && voiceCapable(plan.model);
+        default: return true;
+    }
+}
+
+// If the chat model's plan breaks the user's intent/workflow selection,
+// re-pick a same-kind, workflow-fitting model with the local planner and
+// keep the AI's optimized prompt.
+function coercePlan(plan, sel) {
+    if (planFitsSelection(plan, sel)) return plan;
+    const repick = localPlan(plan.prompt, { kind: sel.intent || plan.kind, intent: sel.intent, workflow: sel.workflow });
+    if (!repick.plan) return plan;
+    return { ...repick.plan, prompt: plan.prompt, generate_audio: plan.generate_audio };
+}
+
 // ---- Plan blocks ------------------------------------------------------------
-export function parsePlan(text) {
+export function parsePlan(text, sel = {}) {
     const match = String(text || '').match(/```plan\s*([\s\S]*?)```/);
     if (!match) return { cleanText: String(text || '').trim(), plan: null };
     let plan = null;
@@ -75,17 +111,36 @@ export function parsePlan(text) {
             }
         }
     } catch { /* malformed plan -> plain chat reply */ }
+    if (plan && (sel.intent || sel.workflow)) plan = coercePlan(plan, sel);
     return { cleanText: String(text).replace(match[0], '').trim(), plan };
 }
 
 // ---- AI chat call -----------------------------------------------------------
-export async function chatWithAgent(history) {
+const WORKFLOW_GUIDANCE = {
+    scratch: 'from scratch — text only, no image inputs; choose models that need no image',
+    edit: 'edit the user\'s photo — choose image models that accept image input / reference photos',
+    animate: 'animate a photo (image-to-video) — choose models that accept a start image',
+    refs: 'keep a character / product identical — choose models whose reference-photo count is above 0',
+    talking: 'talking / voiceover — choose models that take a voiceover, or Seedance family models',
+};
+
+// sel = { intent: 'image'|'video'|null, workflow: string|null } — the user's
+// current gate selection. It rides inside the context string, which the
+// agent-chat function appends verbatim to its system prompt.
+export async function chatWithAgent(history, sel = {}) {
+    let context = buildAgentContext();
+    if (sel.intent) {
+        const wf = sel.workflow && WORKFLOW_GUIDANCE[sel.workflow]
+            ? ` Workflow: ${sel.workflow} (${WORKFLOW_GUIDANCE[sel.workflow]}).`
+            : ' No specific workflow picked yet — any model of this kind is fine.';
+        context += `\n\nCURRENT SELECTION: User intent: ${sel.intent.toUpperCase()}.${wf} Only propose plans with kind "${sel.intent}"${sel.workflow ? ' that fit this workflow' : ''}.`;
+    }
     const response = await fetch('/.netlify/functions/agent-chat', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            context: buildAgentContext(),
+            context,
             messages: history.map(m => ({ role: m.role, content: m.text })),
         }),
     });
@@ -130,7 +185,7 @@ export function detectKind(text) {
 // Returns { question } when one essential is missing, otherwise { plan, note }.
 export function localPlan(brief, known = {}) {
     const text = String(brief || '').trim();
-    const kind = known.kind || detectKind(text);
+    const kind = known.kind || known.intent || detectKind(text);
     if (!kind) {
         return { question: 'Happy to make that. Do you want an image or a video?', needs: 'kind' };
     }
@@ -138,8 +193,19 @@ export function localPlan(brief, known = {}) {
     const styleId = (STYLE_KEYWORDS.find(([id, re]) => styles.some(s => s.id === id) && re.test(text)) || ['any'])[0];
     const style = styles.find(s => s.id === styleId) || styles[0];
 
-    const list = kind === 'video' ? uniq([...t2vModels, ...i2vModels]) : uniq([...t2iModels, ...i2iModels]);
-    const best = fitModels(list, { style: styleId })[0]?.model || list[0];
+    // Candidate pool, narrowed by the workflow gate when one is picked:
+    // scratch = text-only models, edit = image-input models, animate =
+    // i2v-capable models, refs = reference-capable models, talking =
+    // voice-capable or Seedance models.
+    let list = kind === 'video' ? uniq([...t2vModels, ...i2vModels]) : uniq([...t2iModels, ...i2iModels]);
+    const wf = known.workflow || null;
+    if (wf === 'scratch') list = kind === 'video' ? t2vModels.filter(m => !m.images?.required) : [...t2iModels];
+    else if (wf === 'edit' && kind === 'image') list = uniq([...i2iModels, ...t2iModels.filter(m => (fitInfo(m.id)?.refs || 0) > 0)]);
+    else if (wf === 'animate' && kind === 'video') list = [...i2vModels];
+    else if (wf === 'refs') list = list.filter(m => (fitInfo(m.id)?.refs || 0) > 0);
+    else if (wf === 'talking' && kind === 'video') list = list.filter(m => voiceCapable(m.id));
+    if (!list.length) list = kind === 'video' ? uniq([...t2vModels, ...i2vModels]) : uniq([...t2iModels, ...i2iModels]);
+    const best = fitModels(list, { style: styleId, locks: wf === 'refs' })[0]?.model || list[0];
     if (!best) return { question: 'No model in the app fits that right now. Try describing it a little differently.', needs: null };
 
     let prompt = text.replace(/\b(make|create|generate|please|an?\s+image\s+of|an?\s+video\s+of)\b/gi, '').trim() || text;
