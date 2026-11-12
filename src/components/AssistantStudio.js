@@ -5,7 +5,10 @@
 // planner (src/lib/agent.js) when the AI chat backend cannot be reached.
 import { kie } from '../lib/kie.js';
 import { chatWithAgent, parsePlan, localPlan, detectKind, modelById } from '../lib/agent.js';
-import { getVideoSpec } from '../lib/videoSpecs.js';
+import { getVideoSpec, advancedFieldsFor } from '../lib/videoSpecs.js';
+import { createSetupPanel } from './SetupPanel.js';
+import { VIDEO_STYLES, fitInfo, lockInstruction } from '../lib/modelStyles.js';
+import { listLibrary } from '../lib/api.js';
 import { startGenerationJob, getPendingJobs, removePendingJob } from '../lib/pendingJobs.js';
 import { esc } from '../lib/resultCards.js';
 
@@ -25,6 +28,10 @@ export function AssistantStudio() {
     let modeNoticeShown = false;
     let busy = false;
     let pendingBrief = null; // local mode: brief waiting on the image/video answer
+    // Composer working set: uploaded / Library-picked files. Persists across
+    // sends until the user removes a chip.
+    const attachments = []; // { id, kind: 'image'|'video'|'audio', name, url, thumb, uploading }
+    let attachSeq = 0;
 
     // --- Header ---
     const hero = document.createElement('div');
@@ -140,6 +147,53 @@ export function AssistantStudio() {
         }
         card.appendChild(settings);
 
+        // Attachments / locks summary — reads the CURRENT working set (setup
+        // panel + composer attachments) at render time.
+        {
+            const st = setup.getState();
+            const fit = fitInfo(plan.model);
+            const refsCapable = (fit?.refs || 0) > 0;
+            // Tell the setup panel this model's photo limit for its counter line.
+            setup.setLimit(fit?.refs ? { max: fit.refs, model: plan.modelName } : null);
+            if (st.refs.length || attachments.length) {
+                const box = document.createElement('div');
+                box.className = 'flex flex-col gap-1 bg-black/30 border border-white/10 rounded-xl px-3 py-2.5';
+                const head = document.createElement('div');
+                head.className = 'text-[10px] font-bold uppercase tracking-widest text-secondary';
+                head.textContent = 'Attachments';
+                box.appendChild(head);
+                const line = (text, warn = false) => {
+                    const d = document.createElement('div');
+                    d.className = `text-[11px] leading-relaxed ${warn ? 'text-amber-400' : 'text-white/70'}`;
+                    d.textContent = text;
+                    box.appendChild(d);
+                };
+                const lockNames = [...st.characters, ...st.items].filter(x => x.count).map(x => `${x.name} ×${x.count}`).join(', ');
+                line(`Reference photos: ${st.refs.length}${lockNames ? ` (${lockNames})` : ''}`);
+                if (st.refs.length && !refsCapable) {
+                    line('This model can\'t use reference photos — they\'ll be ignored. Ask me for one with reference support.', true);
+                }
+                const imgCount = attachments.filter(a => a.kind === 'image').length;
+                const audioCount = attachments.filter(a => a.kind === 'audio').length;
+                const videoCount = attachments.filter(a => a.kind === 'video').length;
+                if (imgCount) line(`Attached images: ${imgCount} — sent as references.`);
+                if (plan.kind === 'video' && imgCount) line('First attached image will be the start frame (unless you add a start image below).');
+                if (audioCount) {
+                    const isSeedance = String(plan.model).startsWith('bytedance/seedance');
+                    if (!isSeedance && !fit?.voice) line(`Audio: ${audioCount} attached — this model won't use audio, so it will be ignored.`, true);
+                    else line(`Audio: ${audioCount} attached — sent with the generation.`);
+                }
+                if (videoCount) {
+                    const hasRefVideo = [...advancedFieldsFor(plan.model, false), ...advancedFieldsFor(plan.model, true)]
+                        .some(f => f.key === 'reference_video_urls');
+                    line(hasRefVideo
+                        ? `Video references: ${videoCount} — this model accepts them, they'll be passed.`
+                        : 'Video references: only some models use them; if this model can\'t, they\'re ignored.');
+                }
+                card.appendChild(box);
+            }
+        }
+
         // Optional start/reference image.
         let imageUrl = null;
         const attachRow = document.createElement('div');
@@ -194,6 +248,30 @@ export function AssistantStudio() {
                 duration: durSel ? Number(durSel.value) : plan.duration,
             };
             if (!finalPlan.prompt) { status.textContent = 'Add a prompt first.'; return; }
+
+            // Working set: locked character/item photos + attached files.
+            const st = setup.getState();
+            if (st.uploading || attachments.some(a => a.uploading)) {
+                status.textContent = 'Files are still uploading — wait a moment, then Generate.';
+                return;
+            }
+            const fit = fitInfo(finalPlan.model);
+            const refs = (fit?.refs || 0) > 0 ? st.refs.slice(0, fit.refs || 9) : [];
+            const finalPrompt = [finalPlan.prompt, lockInstruction(st.characters, st.items), st.style !== 'any' ? st.styleHint : ''].filter(Boolean).join(' ');
+            const attachedImages = attachments.filter(a => a.kind === 'image' && a.url).map(a => a.url);
+            const attachedAudio = attachments.filter(a => a.kind === 'audio' && a.url).map(a => a.url);
+            const attachedVideos = attachments.filter(a => a.kind === 'video' && a.url).map(a => a.url);
+            const imagesList = finalPlan.kind === 'image'
+                ? [...new Set([...refs, ...attachedImages, ...(imageUrl ? [imageUrl] : [])])].slice(0, 9)
+                : [];
+            const startImage = finalPlan.kind === 'video' ? (imageUrl || attachedImages[0] || null) : null;
+            const isSeedance = String(finalPlan.model).startsWith('bytedance/seedance');
+            const audioUrls = attachedAudio.length && (isSeedance || fit?.voice) ? attachedAudio.slice(0, 3) : [];
+            const hasRefVideoField = finalPlan.kind === 'video' && attachedVideos.length > 0
+                && [...advancedFieldsFor(finalPlan.model, false), ...advancedFieldsFor(finalPlan.model, true)]
+                    .some(f => f.key === 'reference_video_urls');
+            const videoUrls = hasRefVideoField ? attachedVideos.slice(0, 3) : [];
+
             goBtn.disabled = true; dismissBtn.disabled = true;
             status.textContent = 'Queued — running in the background. The result shows up here and in your Library.';
 
@@ -203,10 +281,15 @@ export function AssistantStudio() {
             // its result lands in the Library via the bridge, and it can be
             // resumed by a later Assistant mount even if this chat closed.
             const historyMeta = {
-                prompt: finalPlan.prompt, model: finalPlan.model, modelName: finalPlan.modelName,
+                prompt: finalPrompt, model: finalPlan.model, modelName: finalPlan.modelName,
                 kind: finalPlan.kind, aspect_ratio: finalPlan.aspect_ratio,
                 duration: finalPlan.duration, resolution: finalPlan.resolution,
             };
+            if (imagesList.length) historyMeta.images_list = imagesList;
+            if (finalPlan.kind === 'video' && refs.length) historyMeta.reference_urls = refs;
+            if (audioUrls.length) historyMeta.reference_audio_urls = audioUrls;
+            if (videoUrls.length) historyMeta.reference_video_urls = videoUrls;
+            if (startImage) historyMeta.image_url = startImage;
             const genRow = addGenerating(finalPlan);
             const failInChat = (e) => {
                 genRow.remove();
@@ -216,12 +299,15 @@ export function AssistantStudio() {
             const run = (queueRequest) => {
                 const onRequestId = queueRequest;
                 if (finalPlan.kind === 'image') {
-                    return imageUrl
-                        ? kie.generateI2I({ model: finalPlan.model, prompt: finalPlan.prompt, image_url: imageUrl, aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, onRequestId })
-                        : kie.generateImage({ model: finalPlan.model, prompt: finalPlan.prompt, aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, onRequestId });
+                    return imagesList.length
+                        ? kie.generateI2I({ model: finalPlan.model, prompt: finalPrompt, images_list: imagesList, image_url: imagesList[0], aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, onRequestId })
+                        : kie.generateImage({ model: finalPlan.model, prompt: finalPrompt, aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, onRequestId });
                 }
-                const params = { model: finalPlan.model, prompt: finalPlan.prompt, aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, duration: finalPlan.duration, advanced: { generate_audio: finalPlan.generate_audio !== false }, onRequestId };
-                return imageUrl ? kie.generateI2V({ ...params, image_url: imageUrl }) : kie.generateVideo(params);
+                const params = { model: finalPlan.model, prompt: finalPrompt, aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, duration: finalPlan.duration, advanced: { generate_audio: finalPlan.generate_audio !== false }, onRequestId };
+                if (refs.length) params.reference_urls = refs;
+                if (audioUrls.length) params.reference_audio_urls = audioUrls;
+                if (videoUrls.length) params.advanced = { ...params.advanced, reference_video_urls: videoUrls };
+                return startImage ? kie.generateI2V({ ...params, image_url: startImage }) : kie.generateVideo(params);
             };
             startGenerationJob(
                 { studioType: 'assistant', historyMeta, maxAttempts: 900, interval: 2000 },
@@ -265,11 +351,163 @@ export function AssistantStudio() {
         scrollDown();
     }
 
+    // --- Shot setup: Look + Character/Item locks (the shared SetupPanel) ---
+    const setup = createSetupPanel({ styles: VIDEO_STYLES, onChange: () => {}, withSound: false });
+    const setupBox = document.createElement('div');
+    setupBox.className = 'w-full max-w-3xl mt-4 bg-panel-bg/90 backdrop-blur-xl border border-white/10 rounded-[1.5rem] px-3 pt-3 shadow-3xl';
+    const setupLabel = document.createElement('div');
+    setupLabel.className = 'text-[10px] font-bold uppercase tracking-widest text-secondary px-2 pb-2';
+    setupLabel.textContent = 'ADD CHARACTER / ITEMS · LOOK';
+    setupBox.append(setupLabel, setup.element);
+    container.appendChild(setupBox);
+
+    // --- Composer attachments: uploads + Library picks (the working set) ---
+    const attachChipsRow = document.createElement('div');
+    attachChipsRow.className = 'hidden flex-wrap gap-1.5';
+    const attachRow = document.createElement('div');
+    attachRow.className = 'flex items-center gap-1.5 flex-wrap';
+
+    function renderAttachChips() {
+        attachChipsRow.innerHTML = '';
+        attachChipsRow.classList.toggle('hidden', !attachments.length);
+        attachChipsRow.classList.toggle('flex', !!attachments.length);
+        attachments.forEach(a => {
+            const chipEl = document.createElement('span');
+            chipEl.className = 'flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-full py-1 pl-1 pr-2';
+            if (a.kind === 'audio') {
+                const ic = document.createElement('span');
+                ic.className = 'w-6 h-6 rounded-full bg-primary/15 text-primary flex items-center justify-center text-[11px] shrink-0';
+                ic.textContent = '♪';
+                chipEl.appendChild(ic);
+            } else {
+                const media = document.createElement(a.kind === 'video' ? 'video' : 'img');
+                media.src = a.thumb || a.url;
+                if (a.kind === 'video') { media.muted = true; media.playsInline = true; media.preload = 'metadata'; }
+                media.className = 'w-6 h-6 rounded-full object-cover bg-black shrink-0';
+                chipEl.appendChild(media);
+            }
+            const nm = document.createElement('span');
+            nm.className = 'text-[10px] font-bold text-white/80 max-w-[90px] truncate';
+            nm.textContent = a.name;
+            chipEl.appendChild(nm);
+            if (a.uploading) {
+                const sp = document.createElement('span');
+                sp.className = 'w-3 h-3 shrink-0 border-2 border-primary border-t-transparent rounded-full animate-spin';
+                chipEl.appendChild(sp);
+            }
+            const x = document.createElement('button');
+            x.type = 'button';
+            x.className = 'text-white/50 hover:text-white text-xs leading-none px-0.5';
+            x.textContent = '×';
+            x.title = 'Remove';
+            x.onclick = () => {
+                const i = attachments.indexOf(a);
+                if (i >= 0) attachments.splice(i, 1);
+                if (a.thumb?.startsWith('blob:')) URL.revokeObjectURL(a.thumb);
+                renderAttachChips();
+            };
+            chipEl.appendChild(x);
+            attachChipsRow.appendChild(chipEl);
+        });
+    }
+
+    async function addFiles(kind, files) {
+        for (const file of files) {
+            const entry = {
+                id: ++attachSeq, kind, name: file.name, url: '',
+                thumb: kind === 'audio' ? '' : URL.createObjectURL(file), uploading: true,
+            };
+            attachments.push(entry);
+            renderAttachChips();
+            try {
+                entry.url = kind === 'video' ? await kie.uploadVideo(file) : await kie.uploadFile(file);
+                entry.uploading = false;
+            } catch (e) {
+                const i = attachments.indexOf(entry);
+                if (i >= 0) attachments.splice(i, 1);
+                if (entry.thumb?.startsWith('blob:')) URL.revokeObjectURL(entry.thumb);
+                addBubble('assistant', `Upload failed: ${file.name} — ${String(e.message || e).slice(0, 80)}`);
+            }
+            renderAttachChips();
+        }
+    }
+
+    const ATTACH_BTN = 'text-[11px] font-bold px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-white/70 hover:border-primary/50 hover:text-white transition-all';
+    function fileButton(label, kind, accept, multiple) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = ATTACH_BTN;
+        b.textContent = label;
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = accept; inp.multiple = !!multiple; inp.className = 'hidden';
+        b.appendChild(inp);
+        b.onclick = (e) => { if (e.target !== inp) inp.click(); };
+        inp.onclick = (e) => e.stopPropagation();
+        inp.onchange = () => {
+            const fs = Array.from(inp.files || []);
+            inp.value = '';
+            if (fs.length) addFiles(kind, fs);
+        };
+        return b;
+    }
+    attachRow.append(
+        fileButton('⬆ Image', 'image', 'image/*', true),
+        fileButton('⬆ Video', 'video', 'video/*', false),
+        fileButton('⬆ Audio', 'audio', 'audio/*', false),
+    );
+
+    // Library picker popover (opens upward — the composer sits at the bottom).
+    const libWrap = document.createElement('div');
+    libWrap.className = 'relative';
+    const libBtn = document.createElement('button');
+    libBtn.type = 'button';
+    libBtn.className = ATTACH_BTN;
+    libBtn.textContent = '▤ Library';
+    const libPop = document.createElement('div');
+    libPop.className = 'hidden absolute bottom-[115%] left-0 z-[70] w-72 max-h-80 overflow-y-auto custom-scrollbar bg-card-bg border border-white/10 rounded-2xl p-2 shadow-3xl';
+    libWrap.append(libBtn, libPop);
+    document.addEventListener('click', (e) => { if (!libWrap.contains(e.target)) libPop.classList.add('hidden'); });
+    libBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (!libPop.classList.contains('hidden')) { libPop.classList.add('hidden'); return; }
+        libPop.classList.remove('hidden');
+        libPop.innerHTML = '<div class="text-xs text-secondary p-3">Loading your Library…</div>';
+        try {
+            const items = await listLibrary();
+            libPop.innerHTML = '';
+            if (!items.length) {
+                libPop.innerHTML = '<div class="text-xs text-secondary p-3">Your Library is empty — everything you generate lands here.</div>';
+                return;
+            }
+            items.slice(0, 40).forEach(item => {
+                const kind = item.kind === 'videos' ? 'video' : 'image';
+                const rowB = document.createElement('button');
+                rowB.type = 'button';
+                rowB.className = 'w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 text-left';
+                rowB.innerHTML = `<img src="${esc(item.thumb || item.url || '')}" class="w-10 h-10 rounded-lg object-cover bg-black shrink-0" alt=""><span class="flex flex-col min-w-0"><span class="text-xs font-bold text-white truncate">${kind === 'video' ? '🎬 Video' : '🖼️ Image'}${item.model ? ` · ${esc(item.model)}` : ''}</span><span class="text-[10px] text-secondary truncate">${esc(item.prompt || '')}</span></span>`;
+                rowB.onclick = (ev) => {
+                    ev.stopPropagation();
+                    attachments.push({ id: ++attachSeq, kind, name: 'Library item', url: item.url, thumb: item.thumb || item.url, uploading: false });
+                    renderAttachChips();
+                    libPop.classList.add('hidden');
+                };
+                libPop.appendChild(rowB);
+            });
+        } catch (err) {
+            libPop.innerHTML = '';
+            const m = document.createElement('div');
+            m.className = 'text-xs text-[#ff6b6b] p-3';
+            m.textContent = `Could not load Library: ${err.message}`;
+            libPop.appendChild(m);
+        }
+    };
+    attachRow.appendChild(libWrap);
+
     // --- Input bar ---
     const bar = document.createElement('div');
     bar.className = 'w-full max-w-3xl sticky bottom-0 pt-3 pb-1';
     const barInner = document.createElement('div');
-    barInner.className = 'bg-panel-bg/90 backdrop-blur-xl border border-white/10 rounded-[1.5rem] p-3 flex items-end gap-3 shadow-3xl';
+    barInner.className = 'bg-panel-bg/90 backdrop-blur-xl border border-white/10 rounded-[1.5rem] p-3 flex flex-col gap-2 shadow-3xl';
     const input = document.createElement('textarea');
     input.className = 'flex-1 bg-transparent text-white text-sm leading-relaxed outline-none resize-none max-h-32 placeholder:text-secondary/60 px-2 py-2';
     input.placeholder = 'Describe what you want to make…';
@@ -278,7 +516,10 @@ export function AssistantStudio() {
     sendBtn.type = 'button';
     sendBtn.className = 'px-5 py-2.5 bg-primary text-black font-black text-sm uppercase tracking-wide rounded-xl hover:shadow-glow hover:scale-105 active:scale-95 transition-all disabled:opacity-40 disabled:hover:scale-100 shrink-0';
     sendBtn.textContent = 'Send';
-    barInner.append(input, sendBtn);
+    const inputRow = document.createElement('div');
+    inputRow.className = 'flex items-end gap-3';
+    inputRow.append(input, sendBtn);
+    barInner.append(attachChipsRow, attachRow, inputRow);
     bar.appendChild(barInner);
     container.appendChild(bar);
 
@@ -323,13 +564,76 @@ export function AssistantStudio() {
         else addBubble('assistant', out.question || 'Tell me a bit more about what you want to make.');
     }
 
+    // Compact manifest of the working set, appended to the outgoing message
+    // (the model sees it; the user bubble shows chips instead of the raw text).
+    function buildManifest() {
+        const parts = [];
+        const ready = attachments.filter(a => a.url);
+        if (ready.length) {
+            const counts = ['image', 'video', 'audio'].map(k => {
+                const n = ready.filter(a => a.kind === k).length;
+                return n ? `${n} ${k}${k !== 'audio' && n !== 1 ? 's' : ''}` : '';
+            }).filter(Boolean).join(', ');
+            parts.push(`Attached files: ${counts} (names: ${ready.map(a => a.name).join(', ')})`);
+        }
+        const st = setup.getState();
+        st.characters.filter(c => c.count).forEach(c => parts.push(`Character lock: "${c.name}" (${c.count} photo${c.count === 1 ? '' : 's'})`));
+        st.items.filter(i => i.count).forEach(i => parts.push(`Item lock: "${i.name}" (${i.count} photo${i.count === 1 ? '' : 's'})`));
+        if (st.style !== 'any') parts.push(`Look: ${st.styleLabel}`);
+        return parts.length ? `[${parts.join('. ')}.]` : '';
+    }
+
+    // User bubble: typed text + a compact chips row (attachments + lock summary).
+    function addUserTurn(text) {
+        const bubble = addBubble('user', text);
+        const st = setup.getState();
+        const lockBits = [
+            ...st.characters.filter(c => c.count).map(c => `👤 ${c.name}`),
+            ...st.items.filter(i => i.count).map(i => `📦 ${i.name}`),
+            ...(st.style !== 'any' ? [`Look: ${st.styleLabel}`] : []),
+        ];
+        if (!attachments.length && !lockBits.length) return;
+        const wrap = document.createElement('div');
+        wrap.className = 'mt-2 flex flex-wrap items-center gap-1';
+        attachments.forEach(a => {
+            const c = document.createElement('span');
+            c.className = 'flex items-center gap-1 bg-black/20 rounded-full py-0.5 pl-0.5 pr-2';
+            if (a.kind === 'audio') {
+                const ic = document.createElement('span');
+                ic.className = 'w-5 h-5 rounded-full bg-black/30 flex items-center justify-center text-[10px] shrink-0';
+                ic.textContent = '♪';
+                c.appendChild(ic);
+            } else {
+                const media = document.createElement(a.kind === 'video' ? 'video' : 'img');
+                media.src = a.thumb || a.url;
+                if (a.kind === 'video') { media.muted = true; media.playsInline = true; media.preload = 'metadata'; }
+                media.className = 'w-5 h-5 rounded-full object-cover bg-black shrink-0';
+                c.appendChild(media);
+            }
+            const nm = document.createElement('span');
+            nm.className = 'text-[9px] font-bold max-w-[70px] truncate';
+            nm.textContent = a.name;
+            c.appendChild(nm);
+            wrap.appendChild(c);
+        });
+        if (lockBits.length) {
+            const s = document.createElement('span');
+            s.className = 'text-[9px] font-bold opacity-80';
+            s.textContent = lockBits.join(' · ');
+            wrap.appendChild(s);
+        }
+        bubble.appendChild(wrap);
+        scrollDown();
+    }
+
     async function send() {
         const text = input.value.trim();
         if (!text || busy) return;
         input.value = '';
         busy = true; sendBtn.disabled = true; sendBtn.textContent = '…';
-        addBubble('user', text);
-        history.push({ role: 'user', text });
+        const manifest = buildManifest();
+        addUserTurn(text);
+        history.push({ role: 'user', text: manifest ? `${text} ${manifest}` : text });
 
         if (mode === 'local') { answerLocally(text); busy = false; sendBtn.disabled = false; sendBtn.textContent = 'Send'; return; }
 

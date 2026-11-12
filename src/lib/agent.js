@@ -45,6 +45,7 @@ export function buildAgentContext() {
     lines.push(`RESTYLE LOOKS (Remix video edit): ${RESTYLE_PRESETS.map(p => p.label).join(', ')}`);
     lines.push('WORKFLOWS / TOOLS IN THE APP: Create image (text or photos -> image, with look + character/item locks), Create video (text or image -> video, camera presets, sound: model audio / ElevenLabs voiceover / silent), Cinema still (film camera, lens, lighting controls), Lip sync / talking (photo or video + audio), Motion transfer (a character performs a source video\'s moves), Character swap and Item swap / edit (Remix), Content factory (one brief -> a batch of video scenes), Characters (save a person once, lock them into generations), Library (every generation is saved there automatically; any item can be animated, edited or redone).');
     lines.push('RULES: Generation runs only after the user approves a plan. Results are saved to the Library automatically.');
+    lines.push('ATTACHMENTS & LOCKS: The user can attach files (images, videos, audio) and lock characters/items with reference photos using the panel above the chat box. A user message may end with an [Attached files: ...] manifest listing what is attached and locked — treat those files as available to the generation. Locked character/item photos and attached files are sent automatically with the generation once the user approves the plan, so write plans assuming they are included; when reference photos are attached or locked, prefer models whose reference-photo count is above 0.');
     return lines.join('\n');
 }
 
