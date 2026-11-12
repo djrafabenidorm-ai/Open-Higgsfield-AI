@@ -4,7 +4,8 @@
 // in the Library the normal way). Falls back to a deterministic local
 // planner (src/lib/agent.js) when the AI chat backend cannot be reached.
 import { kie } from '../lib/kie.js';
-import { chatWithAgent, parsePlan, localPlan, detectKind, modelById, modelAcceptsImages, fetchModelPricing, estimateCost, costLabel } from '../lib/agent.js';
+import { chatWithAgent, parsePlan, localPlan, detectKind, modelById, modelAcceptsImages, estimateTime, timeLabel } from '../lib/agent.js';
+import { loadPricing, estimateCredits, priceInfo } from '../lib/modelSort.js';
 import { getVideoSpec, advancedFieldsFor } from '../lib/videoSpecs.js';
 import { createSetupPanel } from './SetupPanel.js';
 import { VIDEO_STYLES, fitInfo, lockInstruction } from '../lib/modelStyles.js';
@@ -183,18 +184,25 @@ export function AssistantStudio() {
         // reasons over. Recomputes when quality/duration change.
         const costLine = document.createElement('div');
         costLine.className = 'text-[11px] font-bold text-secondary';
-        costLine.textContent = 'Estimated cost: checking prices…';
+        costLine.textContent = 'Before you start — checking cost & time…';
         card.appendChild(costLine);
+        // Pre-flight numbers: the cost uses the SAME estimator as the studios
+        // (measured per-resolution prices first, then published rates), and
+        // latestCredits is passed with the job on Generate, like they do.
+        let latestCredits = null;
+        let paintPreflight = () => {};
         const refreshCost = async () => {
-            const prices = await fetchModelPricing();
-            const est = estimateCost(prices[plan.model], {
-                kind: plan.kind,
-                resolution: resSel?.value || plan.resolution,
-                duration: durSel?.value || plan.duration,
-            });
-            costLine.textContent = est
-                ? `Estimated cost: ${costLabel(est)}${est.perSec ? ` (${est.perSec} cr/sec × ${durSel?.value || plan.duration || 5}s)` : ''}`
-                : 'Estimated cost: no published price for this model';
+            await loadPricing();
+            const m = modelById(plan.model);
+            const sel = { duration: durSel?.value || plan.duration, resolution: resSel?.value || plan.resolution };
+            latestCredits = m ? estimateCredits(m, sel) : null;
+            const info = m ? priceInfo(m, sel.resolution) : null;
+            const t = estimateTime({ ...plan, duration: sel.duration, resolution: sel.resolution });
+            const costTxt = latestCredits != null
+                ? `${info?.from ? 'from ' : '≈ '}${latestCredits} credits (~$${(latestCredits * 0.005).toFixed(2)})`
+                : 'cost not published for this model';
+            costLine.textContent = `Before you start — cost: ${costTxt} · typically takes ${timeLabel(t)}`;
+            paintPreflight(costTxt, t);
         };
         refreshCost();
         resSel?.addEventListener('change', refreshCost);
@@ -302,6 +310,13 @@ export function AssistantStudio() {
         status.className = 'text-[11px] text-secondary';
         actions.append(goBtn, dismissBtn, status);
         card.appendChild(actions);
+        // The Generate button itself carries the pre-flight numbers.
+        paintPreflight = (costTxt, t) => {
+            goBtn.textContent = latestCredits != null
+                ? `Generate · ${costTxt.split(' (~')[0]} · ${timeLabel(t)}`
+                : 'Generate ✨';
+        };
+        refreshCost();
 
         goBtn.onclick = () => {
             const finalPlan = {
@@ -311,6 +326,7 @@ export function AssistantStudio() {
                 resolution: resSel ? resSel.value : plan.resolution,
                 duration: durSel ? Number(durSel.value) : plan.duration,
             };
+            if (latestCredits != null) finalPlan.estimatedCredits = latestCredits;
             if (!finalPlan.prompt) { status.textContent = 'Add a prompt first.'; return; }
 
             // Working set: locked character/item photos + attached files.
@@ -339,7 +355,7 @@ export function AssistantStudio() {
             const videoUrls = hasRefVideoField ? attachedVideos.slice(0, 3) : [];
 
             goBtn.disabled = true; dismissBtn.disabled = true;
-            status.textContent = 'Queued — running in the background. The result shows up here and in your Library.';
+            status.textContent = `Queued${latestCredits != null ? ` — cost ≈ ${latestCredits} cr` : ''} · typically ${timeLabel(estimateTime(finalPlan))}. Running in the background; the result shows up here and in your Library.`;
 
             // Run through the shared background queue (same mechanism the
             // studios use): the job is registered in the pending-jobs store,
@@ -351,6 +367,7 @@ export function AssistantStudio() {
                 kind: finalPlan.kind, aspect_ratio: finalPlan.aspect_ratio,
                 duration: finalPlan.duration, resolution: finalPlan.resolution,
             };
+            if (finalPlan.estimatedCredits) historyMeta.estimatedCredits = finalPlan.estimatedCredits;
             if (imagesList.length) historyMeta.images_list = imagesList;
             if (finalPlan.kind === 'video' && refs.length) historyMeta.reference_urls = refs;
             if (audioUrls.length) historyMeta.reference_audio_urls = audioUrls;
@@ -367,10 +384,10 @@ export function AssistantStudio() {
                 const onRequestId = queueRequest;
                 if (finalPlan.kind === 'image') {
                     return imagesList.length
-                        ? kie.generateI2I({ model: finalPlan.model, prompt: finalPrompt, images_list: imagesList, image_url: imagesList[0], aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, onRequestId })
-                        : kie.generateImage({ model: finalPlan.model, prompt: finalPrompt, aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, onRequestId });
+                        ? kie.generateI2I({ model: finalPlan.model, prompt: finalPrompt, images_list: imagesList, image_url: imagesList[0], aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, onRequestId, ...(finalPlan.estimatedCredits ? { estimatedCredits: finalPlan.estimatedCredits } : {}) })
+                        : kie.generateImage({ model: finalPlan.model, prompt: finalPrompt, aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, onRequestId, ...(finalPlan.estimatedCredits ? { estimatedCredits: finalPlan.estimatedCredits } : {}) });
                 }
-                const params = { model: finalPlan.model, prompt: finalPrompt, aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, duration: finalPlan.duration, advanced: { generate_audio: finalPlan.generate_audio !== false }, onRequestId };
+                const params = { model: finalPlan.model, prompt: finalPrompt, aspect_ratio: finalPlan.aspect_ratio, resolution: finalPlan.resolution, duration: finalPlan.duration, advanced: { generate_audio: finalPlan.generate_audio !== false }, onRequestId, ...(finalPlan.estimatedCredits ? { estimatedCredits: finalPlan.estimatedCredits } : {}) };
                 if (refs.length) params.reference_urls = refs;
                 if (audioUrls.length) params.reference_audio_urls = audioUrls;
                 if (videoUrls.length) params.advanced = { ...params.advanced, reference_video_urls: videoUrls };

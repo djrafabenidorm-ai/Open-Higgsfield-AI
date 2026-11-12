@@ -60,6 +60,35 @@ export function costLabel(est) {
     return `${est.from ? 'from ' : ''}≈ ${fmtCr(est.credits)} credits (~${fmtUsd(est.credits)})`;
 }
 
+// Typical generation time for a plan, as a { min, max } range in seconds.
+// Queue time on Kie varies, so this is an honest range by model family and
+// tier — shown to the user BEFORE the job starts, never as a promise.
+export function estimateTime(plan) {
+    if (!plan) return null;
+    if (plan.kind === 'image') {
+        const tier = fitInfo(plan.model)?.tier;
+        if (tier === 'premium') return { min: 45, max: 120 };
+        if (tier === 'budget') return { min: 15, max: 45 };
+        return { min: 30, max: 90 };
+    }
+    const id = String(plan.model || '');
+    const d = Number(plan.duration) || 5;
+    if (id.startsWith('veo')) return { min: 60, max: 150 };
+    if (id.startsWith('bytedance/seedance')) return { min: 90 + d * 6, max: 180 + d * 12 };
+    if (id.startsWith('kling')) return { min: 120, max: 300 };
+    if (id.startsWith('wan')) return { min: 90, max: 240 };
+    if (id.includes('happyhorse')) return { min: 90, max: 240 };
+    return { min: 90, max: 300 };
+}
+
+export function timeLabel(t) {
+    if (!t) return '';
+    if (t.max <= 75) return `~${Math.round(t.min / 5) * 5}–${Math.round(t.max / 5) * 5} sec`;
+    const lo = Math.max(1, Math.round(t.min / 60));
+    const hi = Math.max(lo, Math.round(t.max / 60));
+    return lo === hi ? `~${lo} min` : `~${lo}–${hi} min`;
+}
+
 function modelLine(m, kind, pricing) {
     const fit = fitInfo(m.id);
     const parts = [`${m.id} — ${m.name || m.label || m.id} (${kind})`];
