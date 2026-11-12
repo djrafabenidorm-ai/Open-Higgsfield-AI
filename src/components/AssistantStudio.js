@@ -8,7 +8,7 @@ import { chatWithAgent, parsePlan, localPlan, detectKind, modelById, modelAccept
 import { getVideoSpec, advancedFieldsFor } from '../lib/videoSpecs.js';
 import { createSetupPanel } from './SetupPanel.js';
 import { VIDEO_STYLES, fitInfo, lockInstruction } from '../lib/modelStyles.js';
-import { listLibrary } from '../lib/api.js';
+import { listLibrary, sessionAccount } from '../lib/api.js';
 import { startGenerationJob, getPendingJobs, removePendingJob } from '../lib/pendingJobs.js';
 import { esc } from '../lib/resultCards.js';
 
@@ -92,6 +92,30 @@ export function AssistantStudio() {
         note.textContent = text;
         thread.appendChild(note);
         scrollDown();
+    }
+
+    // Billing help: when Kie blocks work over credits/balance, don't leave
+    // the user with a raw error — give them the top-up page directly.
+    const KIE_BILLING_URL = 'https://kie.ai/billing';
+    function isBillingError(e) {
+        const s = `${e?.code || ''} ${e?.status || ''} ${String(e?.message || e || '')}`;
+        return /insufficient|credit|balance|billing|payment|quota|\b402\b/i.test(s);
+    }
+    function addBillingBubble(lead) {
+        const bubble = addBubble('assistant', lead);
+        bubble.append(document.createElement('br'));
+        const a = document.createElement('a');
+        a.href = KIE_BILLING_URL;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.className = 'text-primary font-bold underline break-all';
+        a.textContent = 'Top up at kie.ai/billing →';
+        bubble.append(a);
+        const tail = document.createElement('span');
+        tail.textContent = ' Add credits there, or enable auto top-up so this doesn\'t stop you mid-project. (Your API key itself is managed at kie.ai/api-key.)';
+        bubble.append(tail);
+        history.push({ role: 'assistant', text: `${lead} Top-up page: ${KIE_BILLING_URL}` });
+        return bubble;
     }
 
     // In-chat placeholder while a generation runs in the background queue.
@@ -316,6 +340,7 @@ export function AssistantStudio() {
                 genRow.remove();
                 status.textContent = `Failed: ${String(e.message || e).slice(0, 110)}`;
                 goBtn.disabled = false; dismissBtn.disabled = false;
+                if (isBillingError(e)) addBillingBubble('That generation was blocked — your Kie.ai balance is too low to run it.');
             };
             const run = (queueRequest) => {
                 const onRequestId = queueRequest;
@@ -841,6 +866,7 @@ export function AssistantStudio() {
             mode = 'local';
             setModeBadge();
             thinking.remove();
+            if (isBillingError(e)) addBillingBubble('The AI chat just hit a Kie.ai billing limit on your account.');
             if (!modeNoticeShown) {
                 modeNoticeShown = true;
                 addNote(`AI chat is unavailable right now (${e.message.slice(0, 80)}) — I've switched to the built-in planner. It still picks models and writes prompts, just without the conversation.`);
@@ -861,6 +887,15 @@ export function AssistantStudio() {
 
     // Fresh chat: the intent gate comes first.
     showIntentCards();
+
+    // Low-balance heads-up, once per open: the backend session reports the
+    // account's Kie credits, so warn before a generation gets blocked.
+    // (Direct-key mode has no session to ask — the call just fails quietly.)
+    sessionAccount().then(({ credits }) => {
+        if (typeof credits === 'number' && credits < 150) {
+            addBillingBubble(`Heads up — your Kie.ai balance is low (${credits} credits), so generations could start getting blocked soon.`);
+        }
+    }).catch(() => { /* no backend session: nothing to check */ });
 
     // Resume generations started in an earlier chat that are still running:
     // they kept going in the background (and into the Library) while this
@@ -887,6 +922,7 @@ export function AssistantStudio() {
             } catch (e) {
                 row.remove();
                 addNote(`A background generation failed: ${String(e.message || e).slice(0, 80)}`);
+                if (isBillingError(e)) addBillingBubble('A background generation was blocked — your Kie.ai balance is too low.');
             } finally {
                 removePendingJob(job.requestId);
             }
