@@ -39,6 +39,17 @@ export function AssistantStudio() {
     let workflow = null; // 'scratch' | 'edit' | 'animate' | 'refs' | 'talking'
     let planGate = null; // model-level gate from the latest plan card: { noImages, noAudio }
     let libKinds = ['image']; // kinds the Library popover may attach right now
+    // Media panel (character / items / files) collapse state. The panel
+    // auto-opens and auto-closes on relevance triggers (mediaTrigger); a
+    // manual toggle flips mediaOpen and sets mediaManual, which holds until
+    // the next trigger re-evaluates. refreshGates() never touches this —
+    // it only gates the controls INSIDE the panel.
+    let mediaOpen = false;
+    let mediaManual = false;
+    let lastPlanAcceptsImages = null; // latest plan card's model image capability
+    let uploadAsk = false; // the latest assistant reply asked for an upload
+    let locksWereActive = false; // lock-entry transition detection for onSetupChanged
+    const mediaUI = { panel: null, body: null, files: null, summary: null, toggle: null, toggleText: null, chevron: null };
 
     // --- Header ---
     const hero = document.createElement('div');
@@ -136,7 +147,7 @@ export function AssistantStudio() {
         const planFit = fitInfo(plan.model);
         const acceptsImgs = modelAcceptsImages(plan.model, plan.kind);
         const card = document.createElement('div');
-        card.className = 'bg-card-bg border border-primary/30 rounded-2xl p-4 md:p-5 flex flex-col gap-3 animate-fade-in-up shadow-3xl';
+        card.className = 'bg-card-bg border border-primary/30 rounded-2xl p-3.5 md:p-5 flex flex-col gap-3 animate-fade-in-up shadow-3xl';
 
         const title = document.createElement('div');
         title.innerHTML = `<div class="text-[10px] font-bold uppercase tracking-widest text-primary">Plan — ready when you are</div>
@@ -157,10 +168,10 @@ export function AssistantStudio() {
         settings.className = 'flex flex-wrap gap-2';
         const mkSelect = (label, values, current) => {
             const wrap = document.createElement('label');
-            wrap.className = 'flex items-center gap-2 bg-black/40 border border-white/10 rounded-xl px-3 py-2';
+            wrap.className = 'flex items-center gap-2 bg-black/40 border border-white/10 rounded-xl px-3 py-2 min-h-[42px]';
             wrap.innerHTML = `<span class="text-[10px] font-bold uppercase tracking-widest text-secondary">${esc(label)}</span>`;
             const sel = document.createElement('select');
-            sel.className = 'bg-transparent text-sm font-bold text-white outline-none [&>option]:bg-[#141414]';
+            sel.className = 'bg-transparent text-sm font-bold text-white outline-none min-h-[42px] [&>option]:bg-[#141414]';
             (values || []).forEach(v => {
                 const opt = document.createElement('option');
                 opt.value = v; opt.textContent = label === 'Duration' ? `${v}s` : v;
@@ -271,7 +282,7 @@ export function AssistantStudio() {
         attachRow.className = 'flex items-center gap-3';
         const attachBtn = document.createElement('button');
         attachBtn.type = 'button';
-        attachBtn.className = 'text-xs font-bold px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:border-primary/50 hover:text-white transition-all';
+        attachBtn.className = 'min-h-[42px] inline-flex items-center text-xs font-bold px-3.5 py-2 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:border-primary/50 hover:text-white active:scale-95 transition-all';
         attachBtn.textContent = plan.kind === 'video' ? '＋ Add a start image (optional)' : '＋ Add a reference image (optional)';
         const attachState = document.createElement('span');
         attachState.className = 'text-[11px] text-secondary';
@@ -299,13 +310,13 @@ export function AssistantStudio() {
         actions.className = 'flex items-center gap-3 pt-1';
         const goBtn = document.createElement('button');
         goBtn.type = 'button';
-        goBtn.className = 'px-6 py-2.5 bg-primary text-black font-black text-sm uppercase tracking-wide rounded-xl hover:shadow-glow hover:scale-105 active:scale-95 transition-all disabled:opacity-40 disabled:hover:scale-100';
+        goBtn.className = 'min-h-[44px] px-6 py-2.5 bg-primary text-black font-black text-sm uppercase tracking-wide rounded-xl hover:shadow-glow hover:scale-105 active:scale-95 transition-all disabled:opacity-40 disabled:hover:scale-100';
         goBtn.textContent = 'Generate ✨';
         const dismissBtn = document.createElement('button');
         dismissBtn.type = 'button';
-        dismissBtn.className = 'text-xs font-bold text-secondary hover:text-white transition-colors';
+        dismissBtn.className = 'min-h-[44px] px-3 inline-flex items-center text-xs font-bold text-secondary hover:text-white transition-colors';
         dismissBtn.textContent = 'Not now';
-        dismissBtn.onclick = () => { card.remove(); planGate = null; refreshGates(); addNote('Plan dismissed — tell me what to change, or describe something new.'); };
+        dismissBtn.onclick = () => { card.remove(); planGate = null; lastPlanAcceptsImages = null; refreshGates(); addNote('Plan dismissed — tell me what to change, or describe something new.'); };
         const status = document.createElement('span');
         status.className = 'text-[11px] text-secondary';
         actions.append(goBtn, dismissBtn, status);
@@ -401,7 +412,7 @@ export function AssistantStudio() {
                         genRow.remove();
                         if (!res?.url) { status.textContent = 'Finished without a result URL.'; goBtn.disabled = false; dismissBtn.disabled = false; return; }
                         card.remove();
-                        planGate = null; refreshGates();
+                        planGate = null; lastPlanAcceptsImages = null; refreshGates();
                         addResult(finalPlan, res.url);
                         history.push({ role: 'assistant', text: `Generated a ${finalPlan.kind} with ${finalPlan.modelName}. It is saved in the Library.` });
                     },
@@ -418,6 +429,8 @@ export function AssistantStudio() {
             noAudio: plan.kind === 'image' ? true : !(String(plan.model).startsWith('bytedance/seedance') || !!planFit?.voice),
         };
         refreshGates();
+        lastPlanAcceptsImages = acceptsImgs;
+        mediaTrigger(); // trigger: plan rendered (a no-image model closes the panel)
 
         thread.appendChild(card);
         scrollDown();
@@ -446,21 +459,126 @@ export function AssistantStudio() {
     }
 
     // --- Shot setup: Look + Character/Item locks (the shared SetupPanel) ---
-    const setup = createSetupPanel({ styles: VIDEO_STYLES, onChange: () => {}, withSound: false });
+    const setup = createSetupPanel({ styles: VIDEO_STYLES, onChange: onSetupChanged, withSound: false });
     const setupBox = document.createElement('div');
-    setupBox.className = 'w-full max-w-3xl mt-4 bg-panel-bg/90 backdrop-blur-xl border border-white/10 rounded-[1.5rem] px-3 pt-3 shadow-3xl';
+    setupBox.className = 'px-3 pt-1';
     const setupLabel = document.createElement('div');
     setupLabel.className = 'text-[10px] font-bold uppercase tracking-widest text-secondary px-2 pb-2';
     setupLabel.textContent = 'ADD CHARACTER / ITEMS · LOOK';
     setupBox.append(setupLabel, setup.element);
-    setupBox.classList.add('hidden'); // refreshGates() reveals it once an intent is picked
-    container.appendChild(setupBox);
+    setupBox.classList.add('hidden'); // refreshGates() gates it inside the panel body
+
+    // --- Media panel: ONE collapsible container for the setup box + the ---
+    // --- composer attach row/chips, with an always-there header bar.     ---
+    const mediaPanel = document.createElement('div');
+    mediaPanel.className = 'w-full max-w-3xl mt-4 bg-panel-bg/90 backdrop-blur-xl border border-white/10 rounded-[1.5rem] shadow-3xl';
+    const mediaHeader = document.createElement('div');
+    mediaHeader.className = 'flex items-center gap-2 min-h-[44px] pl-4 pr-2 py-1';
+    const mediaTitle = document.createElement('span');
+    mediaTitle.className = 'text-[10px] font-bold uppercase tracking-widest text-secondary shrink-0';
+    mediaTitle.textContent = 'CHARACTER · ITEMS · FILES';
+    const mediaSummary = document.createElement('span');
+    mediaSummary.className = 'text-[11px] font-bold text-white/70 truncate min-w-0 flex-1';
+    mediaSummary.textContent = 'Nothing attached';
+    const mediaToggle = document.createElement('button');
+    mediaToggle.type = 'button';
+    mediaToggle.className = 'ml-auto shrink-0 min-w-[40px] min-h-[40px] px-3 rounded-full bg-white/5 border border-white/10 text-white/80 text-[11px] font-black uppercase tracking-wide flex items-center justify-center gap-1 hover:border-primary/50 hover:text-white active:scale-95 transition-all';
+    mediaToggle.setAttribute('aria-expanded', 'false');
+    mediaToggle.setAttribute('aria-label', 'Toggle character, items and files panel');
+    const mediaToggleText = document.createElement('span');
+    mediaToggleText.textContent = 'Open';
+    const mediaChevron = document.createElement('span');
+    mediaChevron.textContent = '▸';
+    mediaToggle.append(mediaToggleText, mediaChevron);
+    mediaToggle.onclick = () => {
+        mediaOpen = !mediaOpen;
+        mediaManual = true; // holds until the next relevance trigger
+        applyMediaPanel();
+    };
+    mediaHeader.append(mediaTitle, mediaSummary, mediaToggle);
+    const mediaBody = document.createElement('div');
+    mediaBody.className = 'flex flex-col';
+    const mediaFiles = document.createElement('div');
+    mediaFiles.className = 'px-3 pb-3 pt-1 flex flex-col gap-2';
+    mediaBody.append(setupBox, mediaFiles);
+    mediaPanel.append(mediaHeader, mediaBody);
+    mediaPanel.classList.add('hidden'); // hidden until an intent is chosen
+    mediaBody.classList.add('hidden'); // fresh chat starts collapsed
+    container.appendChild(mediaPanel);
+    Object.assign(mediaUI, { panel: mediaPanel, body: mediaBody, files: mediaFiles, summary: mediaSummary, toggle: mediaToggle, toggleText: mediaToggleText, chevron: mediaChevron });
+    applyMediaPanel();
+
+    // --- Media panel state machine ----------------------------------------
+    function setupHasEntries() {
+        const st = setup.getState();
+        return st.characters.length > 0 || st.items.length > 0;
+    }
+
+    function updateMediaSummary() {
+        if (!mediaUI.summary) return;
+        const st = setup.getState();
+        const bits = [];
+        if (attachments.length) bits.push(`${attachments.length} file${attachments.length === 1 ? '' : 's'}`);
+        if (st.characters.length) bits.push(`Character: ${st.characters.map(c => c.name).join(', ')}`);
+        if (st.items.length) bits.push(`Item: ${st.items.map(i => i.name).join(', ')}`);
+        mediaUI.summary.textContent = bits.length ? bits.join(' · ') : 'Nothing attached';
+    }
+
+    // Relevant = the chat can actually use media right now: a media
+    // workflow is picked, files are attached, a character/item lock has
+    // entries, the latest plan's model takes images, or the assistant just
+    // asked for an upload. A no-image plan model overrides back to closed
+    // when the user has no material loaded.
+    function relevanceNow() {
+        if (planGate?.noImages && !attachments.length && !setupHasEntries()) return false;
+        if (['edit', 'animate', 'refs', 'talking'].includes(workflow)) return true;
+        if (attachments.length) return true;
+        if (setupHasEntries()) return true;
+        if (lastPlanAcceptsImages) return true;
+        if (uploadAsk) return true;
+        return false;
+    }
+
+    function applyMediaPanel() {
+        if (!mediaUI.panel) return;
+        mediaUI.panel.classList.toggle('hidden', !intent);
+        mediaUI.body.classList.toggle('hidden', !mediaOpen);
+        mediaUI.toggle.setAttribute('aria-expanded', String(mediaOpen));
+        mediaUI.toggleText.textContent = mediaOpen ? 'Minimize' : 'Open';
+        mediaUI.chevron.textContent = mediaOpen ? '▾' : '▸';
+        updateMediaSummary();
+    }
+
+    // A relevance trigger: the manual override clears and the open state
+    // is re-evaluated from the current chat state.
+    function mediaTrigger() {
+        mediaManual = false;
+        mediaOpen = relevanceNow();
+        applyMediaPanel();
+    }
+
+    // SetupPanel changes: keep the header summary fresh, and treat a lock
+    // switching ON (entries appearing) as a relevance trigger.
+    function onSetupChanged() {
+        if (!mediaUI.summary) return; // panel not built yet (construction-time calls)
+        updateMediaSummary();
+        const active = setupHasEntries();
+        if (active && !locksWereActive) mediaTrigger();
+        locksWereActive = active;
+    }
+
+    // Assistant replies: if the latest one asks for an upload/attach,
+    // that is a relevance trigger.
+    function noteAssistantReply(text) {
+        uploadAsk = /upload|attach/i.test(text || '');
+        if (uploadAsk) mediaTrigger();
+    }
 
     // --- Composer attachments: uploads + Library picks (the working set) ---
     const attachChipsRow = document.createElement('div');
     attachChipsRow.className = 'hidden flex-wrap gap-1.5';
     const attachRow = document.createElement('div');
-    attachRow.className = 'items-center gap-1.5 flex-wrap hidden'; // refreshGates() toggles flex/hidden
+    attachRow.className = 'items-center gap-2 flex-wrap hidden'; // refreshGates() toggles flex/hidden
 
     function renderAttachChips() {
         attachChipsRow.innerHTML = '';
@@ -492,7 +610,7 @@ export function AssistantStudio() {
             }
             const x = document.createElement('button');
             x.type = 'button';
-            x.className = 'text-white/50 hover:text-white text-xs leading-none px-0.5';
+            x.className = 'w-7 h-7 min-w-[28px] min-h-[28px] shrink-0 flex items-center justify-center text-white/50 hover:text-white text-sm leading-none';
             x.textContent = '×';
             x.title = 'Remove';
             x.onclick = () => {
@@ -504,6 +622,7 @@ export function AssistantStudio() {
             chipEl.appendChild(x);
             attachChipsRow.appendChild(chipEl);
         });
+        updateMediaSummary();
     }
 
     async function addFiles(kind, files) {
@@ -514,6 +633,7 @@ export function AssistantStudio() {
             };
             attachments.push(entry);
             renderAttachChips();
+            mediaTrigger(); // an attachment was added: media is relevant now
             try {
                 entry.url = kind === 'video' ? await kie.uploadVideo(file) : await kie.uploadFile(file);
                 entry.uploading = false;
@@ -527,7 +647,7 @@ export function AssistantStudio() {
         }
     }
 
-    const ATTACH_BTN = 'text-[11px] font-bold px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-white/70 hover:border-primary/50 hover:text-white transition-all';
+    const ATTACH_BTN = 'min-h-[42px] px-3.5 text-[13px] font-bold rounded-xl bg-white/5 border border-white/10 text-white/70 hover:border-primary/50 hover:text-white active:scale-95 transition-all inline-flex items-center justify-center';
     function fileButton(label, kind, accept, multiple) {
         const b = document.createElement('button');
         b.type = 'button';
@@ -598,6 +718,7 @@ export function AssistantStudio() {
                     }
                     attachments.push({ id: ++attachSeq, kind, name: 'Library item', url: item.url, thumb: item.thumb || item.url, uploading: false });
                     renderAttachChips();
+                    mediaTrigger(); // an attachment was added: media is relevant now
                 };
                 libPop.appendChild(rowB);
             });
@@ -615,14 +736,15 @@ export function AssistantStudio() {
     const gateLine = document.createElement('div');
     gateLine.className = 'w-full max-w-3xl mt-3 hidden items-center justify-between gap-3 bg-panel-bg/60 border border-white/5 rounded-full pl-4 pr-2 py-1.5';
     const gateLineText = document.createElement('span');
-    gateLineText.className = 'text-[11px] font-bold text-white/80';
+    gateLineText.className = 'text-[11px] font-bold text-white/80 truncate min-w-0';
     const gateChangeBtn = document.createElement('button');
     gateChangeBtn.type = 'button';
-    gateChangeBtn.className = 'text-[11px] font-black text-primary hover:text-white transition-colors px-2 py-0.5';
+    gateChangeBtn.className = 'min-h-[36px] px-3 inline-flex items-center shrink-0 text-[11px] font-black text-primary hover:text-white transition-colors';
     gateChangeBtn.textContent = 'Change';
     gateChangeBtn.onclick = () => {
         intent = null; workflow = null; planGate = null;
-        updateGateLine(); refreshGates(); showIntentCards();
+        lastPlanAcceptsImages = null; uploadAsk = false;
+        updateGateLine(); refreshGates(); mediaTrigger(); showIntentCards();
         input.focus();
     };
     gateLine.append(gateLineText, gateChangeBtn);
@@ -634,17 +756,20 @@ export function AssistantStudio() {
     const barInner = document.createElement('div');
     barInner.className = 'bg-panel-bg/90 backdrop-blur-xl border border-white/10 rounded-[1.5rem] p-3 flex flex-col gap-2 shadow-3xl';
     const input = document.createElement('textarea');
-    input.className = 'flex-1 bg-transparent text-white text-sm leading-relaxed outline-none resize-none max-h-32 placeholder:text-secondary/60 px-2 py-2';
+    input.className = 'flex-1 min-w-0 bg-transparent text-white text-base leading-relaxed outline-none resize-none max-h-32 placeholder:text-secondary/60 px-2 py-3 min-h-[46px]';
     input.placeholder = 'Describe what you want to make…';
     input.rows = 1;
     const sendBtn = document.createElement('button');
     sendBtn.type = 'button';
-    sendBtn.className = 'px-5 py-2.5 bg-primary text-black font-black text-sm uppercase tracking-wide rounded-xl hover:shadow-glow hover:scale-105 active:scale-95 transition-all disabled:opacity-40 disabled:hover:scale-100 shrink-0';
+    sendBtn.className = 'min-h-[46px] px-5 py-2.5 bg-primary text-black font-black text-sm uppercase tracking-wide rounded-xl hover:shadow-glow hover:scale-105 active:scale-95 transition-all disabled:opacity-40 disabled:hover:scale-100 shrink-0';
     sendBtn.textContent = 'Send';
     const inputRow = document.createElement('div');
     inputRow.className = 'flex items-end gap-3';
     inputRow.append(input, sendBtn);
-    barInner.append(attachChipsRow, attachRow, inputRow);
+    // The chips + attach row live in the collapsible media panel now;
+    // the sticky composer bar carries only the input row.
+    mediaUI.files.append(attachChipsRow, attachRow);
+    barInner.append(inputRow);
     bar.appendChild(barInner);
     container.appendChild(bar);
 
@@ -686,7 +811,7 @@ export function AssistantStudio() {
         const mk = (kind, emoji, label, sub) => {
             const b = document.createElement('button');
             b.type = 'button';
-            b.className = 'flex-1 bg-card-bg border border-white/10 hover:border-primary/60 hover:bg-primary/5 rounded-2xl p-5 flex flex-col items-center gap-1.5 text-center transition-all';
+            b.className = 'flex-1 min-h-[76px] bg-card-bg border border-white/10 hover:border-primary/60 hover:bg-primary/5 rounded-2xl p-5 flex flex-col items-center justify-center gap-1.5 text-center transition-all active:scale-[0.98]';
             b.innerHTML = `<span class="text-3xl">${emoji}</span><span class="text-white font-black text-sm">${label}</span><span class="text-[11px] text-secondary leading-snug">${sub}</span>`;
             b.onclick = () => chooseIntent(kind);
             return b;
@@ -710,6 +835,7 @@ export function AssistantStudio() {
         showWorkflowChips(kind);
         updateGateLine();
         refreshGates();
+        mediaTrigger(); // trigger: intent chosen
     }
 
     function showWorkflowChips(kind) {
@@ -718,7 +844,7 @@ export function AssistantStudio() {
         WORKFLOWS[kind].forEach(w => {
             const chip = document.createElement('button');
             chip.type = 'button';
-            chip.className = 'text-[11px] font-bold px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-white/70 hover:border-primary/50 hover:text-white transition-all';
+            chip.className = 'min-h-[40px] px-4 inline-flex items-center text-[12px] font-bold rounded-full bg-white/5 border border-white/10 text-white/70 hover:border-primary/50 hover:text-white active:scale-95 transition-all';
             chip.textContent = w.label;
             chip.onclick = () => { rowEl.remove(); chooseWorkflow(w); };
             rowEl.appendChild(chip);
@@ -735,6 +861,7 @@ export function AssistantStudio() {
         history.push({ role: 'assistant', text: w.next });
         updateGateLine();
         refreshGates();
+        mediaTrigger(); // trigger: workflow chosen (scratch closes, media workflows open)
         input.focus();
     }
 
@@ -802,10 +929,11 @@ export function AssistantStudio() {
             pendingBrief = text;
             addBubble('assistant', out.question);
             history.push({ role: 'assistant', text: out.question });
+            noteAssistantReply(out.question);
             return;
         }
         if (out.plan) { addBubble('assistant', out.note); addPlanCard(out.plan); history.push({ role: 'assistant', text: out.note }); }
-        else addBubble('assistant', out.question || 'Tell me a bit more about what you want to make.');
+        else { addBubble('assistant', out.question || 'Tell me a bit more about what you want to make.'); noteAssistantReply(out.question || ''); }
     }
 
     // Compact manifest of the working set, appended to the outgoing message
@@ -878,6 +1006,7 @@ export function AssistantStudio() {
         planGate = null;
         // No intent picked yet: infer it from the words (video words ->
         // video, otherwise image) and proceed at the intent level.
+        const hadIntent = !!intent;
         if (!intent) {
             intent = detectKind(text) || 'image';
             workflow = null;
@@ -885,6 +1014,7 @@ export function AssistantStudio() {
             updateGateLine();
         }
         refreshGates();
+        if (!hadIntent) mediaTrigger(); // trigger: intent inferred from the message
         input.value = '';
         busy = true; sendBtn.disabled = true; sendBtn.textContent = '…';
         const manifest = buildManifest();
@@ -899,6 +1029,7 @@ export function AssistantStudio() {
             const { cleanText, plan } = parsePlan(reply, { intent, workflow });
             thinking.textContent = cleanText || (plan ? 'Here\'s my plan:' : '…');
             history.push({ role: 'assistant', text: cleanText || 'Proposed a generation plan.' });
+            noteAssistantReply(cleanText || ''); // trigger if the reply asks for an upload
             if (plan) addPlanCard(plan);
         } catch (e) {
             mode = 'local';
