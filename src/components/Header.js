@@ -130,6 +130,17 @@ export function Header(navigate) {
     window.addEventListener('assistant-state', (e) => setAssistantBtnState(e.detail?.state));
     rightPart.appendChild(assistantBtn);
 
+    // Top up credits — the balance lives on kie.ai, so this opens the
+    // billing page in a new tab. Always visible in the account area.
+    const topUpBtn = document.createElement('a');
+    topUpBtn.href = 'https://kie.ai/billing';
+    topUpBtn.target = '_blank';
+    topUpBtn.rel = 'noopener noreferrer';
+    topUpBtn.textContent = 'Top up credits';
+    topUpBtn.title = 'Top up your Kie.ai credits';
+    topUpBtn.className = 'hidden md:inline-flex items-center text-[13px] font-black uppercase tracking-wide text-primary border border-primary/40 rounded-full px-3.5 py-1.5 hover:bg-primary hover:text-black hover:shadow-glow transition-all cursor-pointer whitespace-nowrap';
+    rightPart.appendChild(topUpBtn);
+
     // Sign out — clears the session cookie server-side, then reloads so
     // the sign-in gate in main.js takes over again.
     const signOutBtn = document.createElement('button');

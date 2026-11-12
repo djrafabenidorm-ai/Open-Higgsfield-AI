@@ -36,6 +36,9 @@ export function BackendModal(onSuccess) {
                 <button id="cf-login-btn" class="w-full bg-primary text-black font-black py-4 rounded-2xl hover:shadow-glow hover:scale-[1.02] active:scale-[0.98] transition-all">
                     Sign In
                 </button>
+                <a href="https://kie.ai/billing" target="_blank" rel="noopener noreferrer" class="w-full text-center border border-primary/40 text-primary font-black py-3.5 rounded-2xl hover:bg-primary hover:text-black hover:shadow-glow active:scale-[0.98] transition-all text-sm uppercase tracking-wider">
+                    Top up credits
+                </a>
                 <button id="cf-cancel-btn" class="w-full text-[11px] font-bold text-muted hover:text-white transition-colors py-2 uppercase tracking-tighter">
                     Cancel
                 </button>
