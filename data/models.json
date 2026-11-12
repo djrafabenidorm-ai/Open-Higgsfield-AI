@@ -232,6 +232,102 @@
       ]
     },
     {
+      "id": "seedream/4.5-text-to-image",
+      "label": "Seedream 4.5",
+      "kind": "image",
+      "api": "jobs",
+      "blurb": "Photorealistic images at 2K, or 4K on High quality.",
+      "aspects": [
+        "1:1",
+        "4:3",
+        "3:4",
+        "16:9",
+        "9:16",
+        "2:3",
+        "3:2",
+        "21:9"
+      ],
+      "resolutions": [
+        "basic",
+        "high"
+      ],
+      "resolutionDefault": "basic",
+      "resolutionField": "quality"
+    },
+    {
+      "id": "seedream/4.5-edit",
+      "label": "Seedream 4.5 \u2014 Edit",
+      "kind": "image",
+      "api": "jobs",
+      "blurb": "Edits up to 14 photos at 2K, or 4K on High quality.",
+      "images": {
+        "param": "image_urls",
+        "max": 14,
+        "required": true
+      },
+      "aspects": [
+        "1:1",
+        "4:3",
+        "3:4",
+        "16:9",
+        "9:16",
+        "2:3",
+        "3:2",
+        "21:9"
+      ],
+      "resolutions": [
+        "basic",
+        "high"
+      ],
+      "resolutionDefault": "basic",
+      "resolutionField": "quality"
+    },
+    {
+      "id": "google/imagen4",
+      "label": "Imagen 4",
+      "kind": "image",
+      "api": "jobs",
+      "blurb": "Google text-to-image. Strong typography.",
+      "aspects": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "3:4",
+        "4:3",
+        "auto"
+      ]
+    },
+    {
+      "id": "google/imagen4-fast",
+      "label": "Imagen 4 Fast",
+      "kind": "image",
+      "api": "jobs",
+      "blurb": "Fastest, cheapest Imagen 4 tier.",
+      "aspects": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "3:4",
+        "4:3",
+        "auto"
+      ]
+    },
+    {
+      "id": "google/imagen4-ultra",
+      "label": "Imagen 4 Ultra",
+      "kind": "image",
+      "api": "jobs",
+      "blurb": "Highest-detail Imagen 4 tier, up to 2K.",
+      "aspects": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "3:4",
+        "4:3",
+        "auto"
+      ]
+    },
+    {
       "id": "bytedance/seedance-2",
       "label": "Seedance 2.0",
       "kind": "video",
@@ -429,6 +525,153 @@
       "hasDuration": true
     },
     {
+      "id": "bytedance/seedance-2-5",
+      "label": "Seedance 2.5",
+      "kind": "video",
+      "api": "jobs",
+      "blurb": "Reference-to-video: up to 30 photos, 10 videos, 10 audio clips. Up to 30 seconds.",
+      "images": {
+        "param": "reference_image_urls",
+        "max": 30,
+        "required": false
+      },
+      "videos": {
+        "param": "reference_video_urls",
+        "max": 10,
+        "required": false
+      },
+      "aspects": [
+        "1:1",
+        "4:3",
+        "3:4",
+        "16:9",
+        "9:16",
+        "21:9",
+        "adaptive"
+      ],
+      "resolutions": [
+        "480p",
+        "720p",
+        "1080p"
+      ],
+      "resolutionDefault": "720p",
+      "hasDuration": true,
+      "audios": {
+        "param": "reference_audio_urls",
+        "max": 10
+      }
+    },
+    {
+      "id": "kling/v3-turbo-image-to-video",
+      "label": "Kling 3 Turbo \u2014 Image",
+      "kind": "video",
+      "api": "jobs",
+      "blurb": "Animates one photo. Output always has sound.",
+      "images": {
+        "param": "image_urls",
+        "max": 1,
+        "required": true
+      },
+      "resolutions": [
+        "720p",
+        "1080p"
+      ],
+      "resolutionDefault": "720p",
+      "hasDuration": true
+    },
+    {
+      "id": "wan/2-5-image-to-video",
+      "label": "Wan 2.5 \u2014 Image",
+      "kind": "video",
+      "api": "jobs",
+      "blurb": "Animates one photo. 5 or 10 seconds.",
+      "images": {
+        "param": "image_url",
+        "max": 1,
+        "required": true,
+        "single": true
+      },
+      "resolutions": [
+        "720p",
+        "1080p"
+      ],
+      "resolutionDefault": null,
+      "hasDuration": true
+    },
+    {
+      "id": "happyhorse-1-1/image-to-video",
+      "label": "HappyHorse 1.1 \u2014 Image",
+      "kind": "video",
+      "api": "jobs",
+      "blurb": "Animates one photo at up to 1080p.",
+      "images": {
+        "param": "image_urls",
+        "max": 1,
+        "required": true
+      },
+      "resolutions": [
+        "720p",
+        "1080p"
+      ],
+      "resolutionDefault": "1080p",
+      "hasDuration": true
+    },
+    {
+      "id": "kling-4.0/reference-to-video",
+      "label": "Kling 4.0 \u2014 Reference",
+      "kind": "video",
+      "api": "jobs",
+      "blurb": "Up to 30 seconds. Tag references in the prompt as @image_1, @video_1.",
+      "images": {
+        "param": "image_urls",
+        "max": 10,
+        "required": false
+      },
+      "videos": {
+        "param": "video_urls",
+        "max": 5,
+        "required": false
+      },
+      "aspects": [
+        "auto",
+        "16:9",
+        "9:16",
+        "1:1",
+        "21:9"
+      ],
+      "resolutions": [
+        "720p",
+        "1080p"
+      ],
+      "resolutionDefault": "720p",
+      "hasDuration": true
+    },
+    {
+      "id": "happyhorse/reference-to-video",
+      "label": "HappyHorse 1.0 \u2014 Reference",
+      "kind": "video",
+      "api": "jobs",
+      "blurb": "Reference-driven video from up to nine photos.",
+      "images": {
+        "param": "reference_image",
+        "max": 9,
+        "required": true
+      },
+      "aspects": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "resolutions": [
+        "720p",
+        "1080p"
+      ],
+      "resolutionDefault": "1080p",
+      "hasDuration": true
+    },
+    {
       "id": "veo-3-1/quality",
       "label": "Veo 3.1 Quality",
       "kind": "video",
@@ -572,6 +815,18 @@
       ],
       "resolutionDefault": "1080",
       "audioMaxSeconds": 60
+    },
+    {
+      "id": "omnihuman-2-0",
+      "label": "OmniHuman 2.0",
+      "kind": "talk",
+      "api": "jobs",
+      "blurb": "ByteDance. Talking video from one portrait. Audio up to 5 minutes.",
+      "portrait": "image_urls",
+      "portraitArray": true,
+      "audio": "audio_url",
+      "fields": [],
+      "audioMaxSeconds": 300
     },
     {
       "id": "kling/ai-avatar-standard",

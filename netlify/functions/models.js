@@ -4,24 +4,6 @@ const { GENERATIONS, listRecords } = require('./_airtable')
 
 const HAPPYHORSE_1_1_REFERENCE_ID = 'happyhorse-1-1/reference-to-video'
 
-// Kie currently documents this route separately from HappyHorse 1.1. Keep it
-// outside the generated registry so both documented variants remain available.
-const KIE_EXTRA_MODELS = [
-  {
-    id: 'happyhorse/reference-to-video',
-    label: 'HappyHorse Reference to Video',
-    provider: 'kie',
-    kind: 'video',
-    api: 'jobs',
-    blurb: 'Reference-driven video generation from one selected avatar portrait.',
-    images: { param: 'reference_image', max: 5, required: true },
-    aspects: ['16:9', '9:16', '3:4', '4:3', '4:5', '5:4', '1:1', '9:21', '21:9'],
-    resolutions: ['720p', '1080p'],
-    resolutionDefault: '1080p',
-    hasDuration: true,
-  },
-]
-
 // Content Factory uses 1 credit = US$0.01 internally for fal.ai estimates.
 // User-facing balances and generation costs are displayed only in credits.
 const FAL_MODELS = [
@@ -90,10 +72,17 @@ const KIE_FROM_PRICES = {
   'bytedance/seedance-2-fast': [11.7, 'cr/sec', { '480p': 11.7, '720p': 24.8 }],
   // Cheapest Seedance 2 tier (kie.ai/pricing, checked 2026-11-12).
   'bytedance/seedance-2-mini': [2.4, 'cr/sec'],
+  'bytedance/seedance-2-5': [17, 'cr/sec'],
   'kling-3.0/video': [15.1, 'cr/sec'],
   'kling/v3-turbo-text-to-video': [20.2, 'cr/sec'],
+  'kling/v3-turbo-image-to-video': [20.2, 'cr/sec'],
+  // Per-resolution rates without reference video; the lower 17/25.5 cr/s rates
+  // on kie.ai/kling-4-0 apply only when a reference video is uploaded.
+  'kling-4.0/reference-to-video': [28.5, 'cr/sec', { '720p': 28.5, '1080p': 42.5 }],
   'wan/2-5-text-to-video': [60, 'cr/video'],
+  'wan/2-5-image-to-video': [60, 'cr/video'],
   'happyhorse-1-1/text-to-video': [22.5, 'cr/sec'],
+  'happyhorse-1-1/image-to-video': [22.5, 'cr/sec'],
   'happyhorse-1-1/reference-to-video': [22.5, 'cr/sec'],
   'happyhorse/reference-to-video': [22.5, 'cr/sec'],
   'kling-3.0/motion-control': [22.7, 'cr/sec'],
@@ -113,7 +102,13 @@ const KIE_FROM_PRICES = {
   'gpt-image-2-text-to-image': [6, 'cr/image'],
   'gpt-image-2-image-to-image': [6, 'cr/image'],
   'ideogram/v3-text-to-image': [3.5, 'cr/image'],
+  'seedream/4.5-text-to-image': [6.5, 'cr/image'],
+  'seedream/4.5-edit': [6.5, 'cr/image'],
+  'google/imagen4': [8, 'cr/image'],
+  'google/imagen4-fast': [4, 'cr/image'],
+  'google/imagen4-ultra': [12, 'cr/image'],
   'omnihuman-1-5': [27, 'cr/sec'],
+  'omnihuman-2-0': [14, 'cr/sec'],
   'kling/ai-avatar-standard': [10.1, 'cr/sec'],
   'kling/ai-avatar-pro': [10.1, 'cr/sec'],
   'infinitalk/from-audio': [3, 'cr/sec'],
@@ -130,7 +125,7 @@ function withPublishedPrice(model) {
   return { ...model, pricing: { credits: p[0], unit: p[1], byResolution, usd: Math.round(p[0] * 0.005 * 1000) / 1000, runs: 0, source: 'published', from: !p[2] } }
 }
 
-const allModels = () => [...models().map(normalizeModel), ...KIE_EXTRA_MODELS, ...FAL_MODELS].map(withPublishedPrice)
+const allModels = () => [...models().map(normalizeModel), ...FAL_MODELS].map(withPublishedPrice)
 
 exports.handler = guard('models', async function (event) {
   if (event.httpMethod === 'OPTIONS') return json(200, { ok: true })
