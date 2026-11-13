@@ -105,6 +105,42 @@ export function Header(navigate) {
     const rightPart = document.createElement('div');
     rightPart.className = 'flex items-center gap-4';
 
+    // MATAI Assistant — avatar button on the right of the header. Opens the
+    // assistant as its own full page (main.js owns the open/dock/close
+    // behaviour and reports it back through 'assistant-state').
+    const assistantBtn = document.createElement('button');
+    assistantBtn.type = 'button';
+    assistantBtn.title = 'MATAI Assistant — chat to create';
+    assistantBtn.className = 'relative w-9 h-9 rounded-full bg-primary/15 border border-primary/40 flex items-center justify-center text-primary hover:bg-primary hover:text-black hover:shadow-glow transition-all shrink-0 cursor-pointer';
+    assistantBtn.innerHTML = `
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8L12 2z"/>
+            <path d="M18.5 14.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9.9-2.6z"/>
+        </svg>
+    `;
+    assistantBtn.onclick = () => navigate('assistant');
+    const setAssistantBtnState = (state) => {
+        const open = state === 'full' || state === 'docked';
+        assistantBtn.classList.toggle('bg-primary', open);
+        assistantBtn.classList.toggle('text-black', open);
+        assistantBtn.classList.toggle('shadow-glow', open);
+        assistantBtn.classList.toggle('bg-primary/15', !open);
+        assistantBtn.classList.toggle('text-primary', !open);
+    };
+    window.addEventListener('assistant-state', (e) => setAssistantBtnState(e.detail?.state));
+    rightPart.appendChild(assistantBtn);
+
+    // Top up credits — the balance lives on kie.ai, so this opens the
+    // billing page in a new tab. Always visible in the account area.
+    const topUpBtn = document.createElement('a');
+    topUpBtn.href = 'https://kie.ai/billing';
+    topUpBtn.target = '_blank';
+    topUpBtn.rel = 'noopener noreferrer';
+    topUpBtn.textContent = 'Top up credits';
+    topUpBtn.title = 'Top up your Kie.ai credits';
+    topUpBtn.className = 'hidden md:inline-flex items-center text-[13px] font-black uppercase tracking-wide text-primary border border-primary/40 rounded-full px-3.5 py-1.5 hover:bg-primary hover:text-black hover:shadow-glow transition-all cursor-pointer whitespace-nowrap';
+    rightPart.appendChild(topUpBtn);
+
     // Sign out — clears the session cookie server-side, then reloads so
     // the sign-in gate in main.js takes over again.
     const signOutBtn = document.createElement('button');

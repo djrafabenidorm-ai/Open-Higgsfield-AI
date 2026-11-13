@@ -8,7 +8,7 @@
 import { kie } from '../lib/kie.js';
 import { REMIX_MODES, REMIX_SPECS, REMIX_LABELS, modelsForMode } from '../lib/remixSpecs.js';
 import { startGenerationJob, getPendingJobs, removePendingJob } from '../lib/pendingJobs.js';
-import { loadPricing, costText, priceLabel } from '../lib/modelSort.js';
+import { loadPricing, costText, priceLabel, sortByPriceDesc } from '../lib/modelSort.js';
 import { createQueueHistory, costMeta } from '../lib/studioQueue.js';
 import { renderResultGrid } from '../lib/resultCards.js';
 import { createUploadPicker } from './UploadPicker.js';
@@ -263,7 +263,7 @@ export function RemixStudio({ fixedMode } = {}) {
 
     function refreshModelSelect() {
         modelField.sel.innerHTML = '';
-        modelsForMode(mode.id).forEach(id => {
+        sortByPriceDesc(modelsForMode(mode.id).map(modelObj)).forEach(({ id }) => {
             const o = document.createElement('option');
             const p = priceLabel(modelObj(id), resolution);
             o.value = id;

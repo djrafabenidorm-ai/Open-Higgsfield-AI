@@ -36,6 +36,9 @@ export function AuthModal(onSuccess) {
                 <a href="https://kie.ai/api-key" target="_blank" class="text-center text-[11px] font-bold text-muted hover:text-white transition-colors py-2 uppercase tracking-tighter">
                     Get an API Key at kie.ai →
                 </a>
+                <a href="https://kie.ai/billing" target="_blank" rel="noopener noreferrer" class="w-full text-center border border-primary/40 text-primary font-black py-3.5 rounded-2xl hover:bg-primary hover:text-black hover:shadow-glow active:scale-[0.98] transition-all text-sm uppercase tracking-wider">
+                    Top up credits
+                </a>
                 <button id="backend-login-btn" class="w-full border border-white/10 text-white font-bold py-3 rounded-2xl hover:bg-white/5 transition-all text-sm">
                     Or sign in with content-factory →
                 </button>

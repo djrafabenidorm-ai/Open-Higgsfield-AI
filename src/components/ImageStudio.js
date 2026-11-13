@@ -677,8 +677,11 @@ export function ImageStudio() {
                 list.innerHTML = '';
                 const st = setup.getState();
                 const lf = filter.toLowerCase();
-                const results = fitModels(getCurrentModels(), { style: st.style, locks: st.locks, refCount: st.refCount })
+                const fitResults = fitModels(getCurrentModels(), { style: st.style, locks: st.locks, refCount: st.refCount })
                     .filter(r => r.model.name.toLowerCase().includes(lf) || r.model.id.toLowerCase().includes(lf));
+                // Most expensive first, keeping each model's fit data attached.
+                const byId = new Map(fitResults.map(r => [r.model.id, r]));
+                const results = sortByPriceDesc(fitResults.map(r => r.model)).map(m => byId.get(m.id));
                 if (!results.length) list.innerHTML = '<div class="text-xs text-secondary p-3">No model fits this look and lock. Try another look.</div>';
 
                 results.forEach(({ model: m, fit, overLimit }) => {

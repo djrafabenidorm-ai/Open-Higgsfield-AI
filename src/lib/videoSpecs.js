@@ -30,11 +30,13 @@ export const VIDEO_SPECS = {
         durations: range(4, 15), durationDefault: 5, durationType: 'number',
         advanced: seedanceFields,
     },
-    'bytedance/seedance-1.5-pro': {
-        durations: [5, 10], durationDefault: 5, durationType: 'number',
-        advanced: [
-            { key: 'generate_audio', label: 'Generate audio', type: 'toggle', default: true },
-        ],
+    'bytedance/seedance-2-mini': {
+        durations: range(4, 15), durationDefault: 5, durationType: 'number',
+        advanced: seedanceFields,
+    },
+    'bytedance/seedance-2-5': {
+        durations: range(4, 30), durationDefault: 5, durationType: 'number',
+        advanced: seedanceFields,
     },
     'kling-3.0/video': {
         durations: range(3, 15), durationDefault: 5, durationType: 'string',
@@ -48,8 +50,28 @@ export const VIDEO_SPECS = {
         durations: range(3, 15), durationDefault: 5, durationType: 'string',
         advanced: [],
     },
+    'kling/v3-turbo-image-to-video': {
+        durations: range(3, 15), durationDefault: 5, durationType: 'string',
+        imageOnly: true,
+        advanced: [],
+    },
+    'kling-4.0/reference-to-video': {
+        durations: range(3, 30), durationDefault: 5, durationType: 'number',
+        advanced: [
+            { key: 'keep_original_sound', label: 'Keep reference video sound', type: 'toggle', default: false, hint: 'Only applies when a reference video is attached' },
+        ],
+    },
     'wan/2-5-text-to-video': {
         durations: [5, 10], durationDefault: 5, durationType: 'string',
+        advanced: [
+            { key: 'negative_prompt', label: 'Negative prompt', type: 'text', default: '', max: 500, hint: 'What to keep out of the video' },
+            { key: 'enable_prompt_expansion', label: 'Prompt expansion', type: 'toggle', default: false, hint: 'Lets the model rewrite the prompt in more detail' },
+            { key: 'seed', label: 'Seed', type: 'number', default: '', hint: 'Same seed + prompt gives a similar result. Empty = random' },
+        ],
+    },
+    'wan/2-5-image-to-video': {
+        durations: [5, 10], durationDefault: 5, durationType: 'string',
+        imageOnly: true,
         advanced: [
             { key: 'negative_prompt', label: 'Negative prompt', type: 'text', default: '', max: 500, hint: 'What to keep out of the video' },
             { key: 'enable_prompt_expansion', label: 'Prompt expansion', type: 'toggle', default: false, hint: 'Lets the model rewrite the prompt in more detail' },
@@ -61,6 +83,16 @@ export const VIDEO_SPECS = {
         advanced: [],
     },
     'happyhorse-1-1/reference-to-video': {
+        durations: range(3, 15), durationDefault: 5, durationType: 'number',
+        imageOnly: true,
+        advanced: [],
+    },
+    'happyhorse-1-1/image-to-video': {
+        durations: range(3, 15), durationDefault: 5, durationType: 'number',
+        imageOnly: true,
+        advanced: [],
+    },
+    'happyhorse/reference-to-video': {
         durations: range(3, 15), durationDefault: 5, durationType: 'number',
         imageOnly: true,
         advanced: [],
@@ -121,7 +153,7 @@ export function buildVideoParams(params) {
         }
         return { params: out, images: params.reference_urls.slice(), firstFrame: null };
     }
-    const isSeedance2 = params.model === 'bytedance/seedance-2' || params.model === 'bytedance/seedance-2-fast';
+    const isSeedance2 = params.model === 'bytedance/seedance-2' || params.model === 'bytedance/seedance-2-fast' || params.model === 'bytedance/seedance-2-mini' || params.model === 'bytedance/seedance-2-5';
     if (hasImage && isSeedance2) {
         // A voiceover (reference audio) cannot be combined with first-frame mode.
         const role = params.reference_audio_urls?.length ? 'reference' : (extra.image_role || 'first frame');

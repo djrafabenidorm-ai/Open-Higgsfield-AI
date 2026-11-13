@@ -31,13 +31,19 @@ const FIT = {
     // ---- Video ----
     'veo-3-1/quality': { alwaysSound: true, styles: ['realistic', 'cinematic', 'ugc', 'product'], tier: 'premium', refs: 0, note: 'Best realism, with sound' },
     'bytedance/seedance-2': { styles: ALL_VIDEO, tier: 'premium', refs: 9, voice: true, note: 'Up to 9 reference photos, takes your voiceover' },
+    'bytedance/seedance-2-5': { styles: ALL_VIDEO, tier: 'premium', refs: 30, voice: true, note: 'Up to 30 reference photos, takes your voiceover' },
+    'kling-4.0/reference-to-video': { styles: ['realistic', 'cinematic', 'ugc', 'product'], tier: 'premium', refs: 10, note: 'Tag references in the prompt with @image_1' },
     'kling-3.0/video': { styles: ['realistic', 'cinematic', 'ugc', 'product'], tier: 'premium', refs: 0, note: 'Sharp, natural motion' },
     'veo-3-1/fast': { alwaysSound: true, styles: ['realistic', 'cinematic', 'ugc', 'product'], tier: 'standard', refs: 3, refDuration: 8, note: 'Veo with up to 3 reference photos' },
-    'bytedance/seedance-1.5-pro': { styles: ['realistic', 'cinematic'], tier: 'standard', refs: 0, note: 'Cinematic, with audio' },
+    'bytedance/seedance-2-mini': { styles: ALL_VIDEO, tier: 'budget', refs: 9, voice: true, note: 'Cheapest Seedance, up to 9 reference photos, takes your voiceover' },
     'happyhorse-1-1/reference-to-video': { styles: ['ugc', 'product', 'cartoon'], tier: 'standard', refs: 5, note: 'Places a product or character from photos' },
+    'happyhorse/reference-to-video': { styles: ['ugc', 'product', 'cartoon'], tier: 'standard', refs: 9, note: 'Places a product or character from photos' },
     'kling/v3-turbo-text-to-video': { styles: ['cinematic', 'cartoon'], tier: 'standard', refs: 0, note: 'Quick, stylised' },
+    'kling/v3-turbo-image-to-video': { styles: ['cinematic', 'cartoon'], tier: 'standard', refs: 1, note: 'Animates one photo, sound included' },
     'wan/2-5-text-to-video': { styles: ['cartoon'], tier: 'standard', refs: 0, note: 'Good for animation' },
+    'wan/2-5-image-to-video': { styles: ['cartoon'], tier: 'standard', refs: 1, note: 'Animates one photo' },
     'happyhorse-1-1/text-to-video': { styles: ['cartoon', 'ugc'], tier: 'standard', refs: 0, note: '' },
+    'happyhorse-1-1/image-to-video': { styles: ['cartoon', 'ugc'], tier: 'standard', refs: 1, note: 'Animates one photo' },
     'veo-3-1/lite': { alwaysSound: true, styles: ['realistic', 'ugc'], tier: 'budget', refs: 3, refDuration: 8, note: 'Cheapest Veo' },
     'bytedance/seedance-2-fast': { styles: ALL_VIDEO, tier: 'budget', refs: 9, voice: true, note: 'Cheaper Seedance for drafts' },
     // ---- Image ----
@@ -49,6 +55,11 @@ const FIT = {
     'nano-banana-2-lite': { styles: ['realistic', 'cartoon'], tier: 'budget', refs: 10, note: 'Cheaper drafts' },
     'google/nano-banana': { styles: ['realistic', 'cartoon'], tier: 'budget', refs: 0, note: 'Cheaper drafts' },
     'google/nano-banana-edit': { styles: ['realistic', 'cartoon', 'product'], tier: 'budget', refs: 10, note: 'Cheaper edits' },
+    'seedream/4.5-text-to-image': { styles: ['realistic', 'ugc', 'product', 'design'], tier: 'standard', refs: 0, note: '2K images, 4K on High quality' },
+    'seedream/4.5-edit': { styles: ['realistic', 'ugc', 'product'], tier: 'standard', refs: 14, note: 'Edits up to 14 photos' },
+    'google/imagen4': { styles: ['realistic', 'design', 'product'], tier: 'standard', refs: 0, note: 'Clean text and typography' },
+    'google/imagen4-fast': { styles: ['realistic', 'cartoon'], tier: 'budget', refs: 0, note: 'Cheapest Imagen tier' },
+    'google/imagen4-ultra': { styles: ['realistic', 'design', 'product'], tier: 'premium', refs: 0, note: 'Highest-detail Imagen tier' },
 };
 
 const TIER_RANK = { premium: 0, standard: 1, budget: 2 };

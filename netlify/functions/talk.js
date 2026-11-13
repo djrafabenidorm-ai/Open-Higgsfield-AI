@@ -105,7 +105,7 @@ exports.handler = guard('talk', async function (event) {
   // Step 2 -- portrait + completed audio -> video, on a callback.
   const portraitUrl = await toHostedUrl(portrait, 0, kieKey)
   const input = {
-    [model.portrait]: portraitUrl,
+    [model.portrait]: model.portraitArray ? [portraitUrl] : portraitUrl,
     [model.audio]: audio,
     prompt: b.prompt || motionPrompt(motion),
   }
